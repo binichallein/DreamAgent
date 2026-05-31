@@ -19,6 +19,10 @@ import {
 import { SessionInfoPopover } from "./session-info-popover";
 import { OpenInMenu } from "./open-in-menu";
 import { isMacOS } from "@/hooks/utils";
+import {
+  shouldCancelSessionTitleEdit,
+  shouldCommitSessionTitleEdit,
+} from "@/features/sessions/session-title-edit";
 
 type ChatWorkspaceHeaderProps = {
   currentStep: number;
@@ -48,6 +52,7 @@ export function ChatWorkspaceHeader({
   onRenameSession,
 }: ChatWorkspaceHeaderProps) {
   const searchShortcutModifier = isMacOS() ? "Cmd" : "Ctrl";
+  const displayTitle = sessionDescription || "Untitled session";
 
   // Editing state
   const [isEditing, setIsEditing] = useState(false);
@@ -83,7 +88,7 @@ export function ChatWorkspaceHeader({
   }, [selectedSessionId, editingTitle, onRenameSession, handleCancelEdit]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3 lg:pl-8">
+    <div className="flex min-h-9 min-w-0 flex-col gap-2 border-b px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-4 lg:px-4">
       <div className="flex min-w-0 items-center gap-2">
         {onOpenSidebar ? (
           <button
@@ -103,38 +108,44 @@ export function ChatWorkspaceHeader({
               onChange={(e) => setEditingTitle(e.target.value)}
               onBlur={handleSaveEdit}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                e.stopPropagation();
+                if (
+                  shouldCommitSessionTitleEdit(
+                    e.key,
+                    e.nativeEvent.isComposing,
+                  )
+                ) {
                   e.preventDefault();
                   handleSaveEdit();
                 }
-                if (e.key === "Escape") {
+                if (shouldCancelSessionTitleEdit(e.key)) {
                   e.preventDefault();
                   handleCancelEdit();
                 }
               }}
               className="h-7 text-xs font-bold"
             />
-          ) : sessionDescription ? (
+          ) : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  className="truncate text-xs font-bold cursor-pointer hover:text-primary text-left bg-transparent border-none p-0"
+                  className="truncate bg-transparent p-0 text-left text-xs font-semibold text-foreground hover:text-primary"
                   onDoubleClick={handleDoubleClick}
                 >
-                  {shortenTitle(sessionDescription, 60)}
+                  {shortenTitle(displayTitle, 60)}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-md">
-                <div>{sessionDescription}</div>
-                {onRenameSession && (
+                <div>{displayTitle}</div>
+                {onRenameSession && sessionDescription ? (
                   <div className="text-muted-foreground text-[10px] mt-1">
                     Double-click to rename
                   </div>
-                )}
+                ) : null}
               </TooltipContent>
             </Tooltip>
-          ) : null}
+          )}
         </div>
       </div>
       <div className="flex items-center justify-end gap-2">

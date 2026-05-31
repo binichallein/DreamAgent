@@ -46,12 +46,16 @@ export type GlobalConfigControlsProps = {
   className?: string;
   planMode?: boolean;
   onPlanModeChange?: (enabled: boolean) => void;
+  dreamMode?: boolean;
+  onDreamModeChange?: (enabled: boolean) => void;
 };
 
 export function GlobalConfigControls({
   className,
   planMode = false,
   onPlanModeChange,
+  dreamMode = false,
+  onDreamModeChange,
 }: GlobalConfigControlsProps): ReactElement {
   const { config, isLoading, isUpdating, error, refresh, update } =
     useGlobalConfig();
@@ -299,6 +303,31 @@ export function GlobalConfigControls({
               {planMode
                 ? "Plan mode is active. The model will only read and plan, not modify files."
                 : "Enable plan mode for read-only research and planning."}
+            </TooltipContent>
+          </Tooltip>
+        </>
+      )}
+
+      {onDreamModeChange && (
+        <>
+          <div className="mx-0 h-4 w-px bg-border/70" />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex h-9 items-center gap-2 rounded-md px-2">
+                <span className="text-xs text-muted-foreground">
+                  Dream
+                </span>
+                <Switch
+                  aria-label="Toggle Dream mode"
+                  checked={dreamMode}
+                  onCheckedChange={onDreamModeChange}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent sideOffset={8}>
+              {dreamMode
+                ? "Dream mode is active. The model can save optimization and environment debug memories."
+                : "Enable Dream mode to let the model save specialist memories from this session."}
             </TooltipContent>
           </Tooltip>
         </>

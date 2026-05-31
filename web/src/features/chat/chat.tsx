@@ -86,6 +86,10 @@ type ChatWorkspaceProps = {
   planMode?: boolean;
   /** Callback to set plan mode */
   onPlanModeChange?: (enabled: boolean) => void;
+  /** Whether Dream mode is active */
+  dreamMode?: boolean;
+  /** Callback to set Dream mode */
+  onDreamModeChange?: (enabled: boolean) => void;
   /** Maximum context size for the current model (tokens) */
   maxContextSize?: number;
   /** Fork session at a specific turn */
@@ -122,6 +126,8 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   slashCommands = [],
   planMode = false,
   onPlanModeChange,
+  dreamMode = false,
+  onDreamModeChange,
   onForkSession,
   errorMessage,
 }: ChatWorkspaceProps): ReactElement {
@@ -274,7 +280,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden lg:sticky lg:top-4 lg:min-h-[560px]">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background">
       <div className="relative flex h-full flex-col">
         <ChatWorkspaceHeader
           currentStep={currentStep}
@@ -328,29 +334,33 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
                     pendingQuestionMap={pendingQuestionMap}
                   />
                 ) : (
-                  <div className="px-0 pb-0 pt-0 sm:px-3 sm:pb-3">
-                    <ChatPromptComposer
-                      status={status}
-                      onSubmit={onSubmit}
-                      canSendMessage={canSendMessage}
-                      currentSession={currentSession}
-                      isUploading={isUploading}
-                      isStreaming={isStreaming}
-                      isAwaitingIdle={isAwaitingIdle}
-                      isReplayingHistory={isReplayingHistory}
-                      onCancel={onCancel}
-                      onListSessionDirectory={onListSessionDirectory}
-                      gitDiffStats={gitDiffStats}
-                      isGitDiffLoading={isGitDiffLoading}
-                      slashCommands={slashCommands}
-                      planMode={planMode}
-                      onPlanModeChange={onPlanModeChange}
-                      activityStatus={activityStatus}
-                      usagePercent={usagePercent}
-                      usedTokens={usedTokens}
-                      maxTokens={maxTokens}
-                      tokenUsage={tokenUsage}
-                    />
+                  <div className="px-3 pb-3 pt-0">
+                    <div className="mx-auto w-full max-w-[608px]">
+                      <ChatPromptComposer
+                        status={status}
+                        onSubmit={onSubmit}
+                        canSendMessage={canSendMessage}
+                        currentSession={currentSession}
+                        isUploading={isUploading}
+                        isStreaming={isStreaming}
+                        isAwaitingIdle={isAwaitingIdle}
+                        isReplayingHistory={isReplayingHistory}
+                        onCancel={onCancel}
+                        onListSessionDirectory={onListSessionDirectory}
+                        gitDiffStats={gitDiffStats}
+                        isGitDiffLoading={isGitDiffLoading}
+                        slashCommands={slashCommands}
+                        planMode={planMode}
+                        onPlanModeChange={onPlanModeChange}
+                        dreamMode={dreamMode}
+                        onDreamModeChange={onDreamModeChange}
+                        activityStatus={activityStatus}
+                        usagePercent={usagePercent}
+                        usedTokens={usedTokens}
+                        maxTokens={maxTokens}
+                        tokenUsage={tokenUsage}
+                      />
+                    </div>
                   </div>
                 )}
               </div>

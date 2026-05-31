@@ -59,12 +59,14 @@ from kimi_cli.soul.dynamic_injection import (
     DynamicInjectionProvider,
     normalize_history,
 )
+from kimi_cli.soul.dynamic_injections.dream_mode import DreamModeInjectionProvider
 from kimi_cli.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from kimi_cli.soul.dynamic_injections.yolo_mode import YoloModeInjectionProvider
 from kimi_cli.soul.message import check_message, system, system_reminder, tool_result_to_message
 from kimi_cli.soul.slash import registry as soul_slash_registry
 from kimi_cli.soul.toolset import KimiToolset
 from kimi_cli.tools.dmail import NAME as SendDMail_NAME
+from kimi_cli.tools.dream_memory import WriteEnvironmentDebugMemory, WriteOptimizationMemory
 from kimi_cli.tools.utils import ToolRejectedError
 from kimi_cli.utils.logging import logger
 from kimi_cli.utils.slashcmd import SlashCommand, parse_slash_command_call
@@ -94,6 +96,26 @@ if TYPE_CHECKING:
 SKILL_COMMAND_PREFIX = "skill:"
 FLOW_COMMAND_PREFIX = "flow:"
 DEFAULT_MAX_FLOW_MOVES = 1000
+DREAM_MEMORY_HOOK_MAX_CHARS = 16_000
+DREAM_MEMORY_STEP_INTERVAL = 10
+DREAM_MEMORY_HOOK_SYSTEM_PROMPT = """You are the Dream memory post-turn extractor.
+
+You run after the main assistant turn when Dream mode is active. Your only job is to decide
+whether the completed turn contains reusable specialist experience for an inference optimization
+expert agent.
+
+Allowed memory scope:
+- Inference optimization lessons.
+- Environment deployment/debug lessons that are relevant to model serving, model deployment,
+  inference backends, GPU/CPU runtimes, dependencies, drivers, kernels, precision, performance,
+  or similar engineering work.
+
+If the turn contains reusable experience, call the appropriate Dream memory tool once for each
+clear memory. If it does not, do not call any tools and reply exactly: NO_DREAM_MEMORY.
+
+Do not store personal facts, broad summaries, generic programming tips, or user preferences.
+Write failed attempts only when the failure conditions and lesson are precise.
+"""
 
 
 def classify_api_error(e: Exception) -> tuple[str, int | None]:
@@ -188,6 +210,8 @@ class KimiSoul:
 
         self._steer_queue: asyncio.Queue[str | list[ContentPart]] = asyncio.Queue()
         self._plan_mode: bool = self._runtime.session.state.plan_mode
+        self._dream_mode: bool = self._runtime.session.state.dream_mode
+        self._dream_memory_hook_cursor: int | None = None
         self._plan_session_id: str | None = self._runtime.session.state.plan_session_id
         # Pre-warm slug cache so the persisted slug survives process restarts
         if self._plan_session_id is not None and self._runtime.session.state.plan_slug is not None:
@@ -195,10 +219,12 @@ class KimiSoul:
 
             seed_slug_cache(self._plan_session_id, self._runtime.session.state.plan_slug)
         self._pending_plan_activation_injection: bool = False
+        self._pending_dream_activation_injection: bool = False
         if self._plan_mode:
             self._ensure_plan_session_id()
         self._injection_providers: list[DynamicInjectionProvider] = [
             PlanModeInjectionProvider(),
+            DreamModeInjectionProvider(),
             *(
                 []
                 if self._runtime.config.skip_yolo_prompt_injection
@@ -212,6 +238,7 @@ class KimiSoul:
 
         # Bind plan mode state to tools that support it
         self._bind_plan_mode_tools()
+        self.sync_dream_memory_tool_visibility(client_supports_dream_mode=True)
 
         self._slash_commands = self._build_slash_commands()
         self._slash_command_map = self._index_slash_commands(self._slash_commands)
@@ -239,6 +266,11 @@ class KimiSoul:
     def plan_mode(self) -> bool:
         """Whether plan mode (read-only research and planning) is active."""
         return self._plan_mode
+
+    @property
+    def dream_mode(self) -> bool:
+        """Whether Dream memory writing mode is active."""
+        return self._dream_mode
 
     @property
     def hook_engine(self) -> HookEngine:
@@ -313,6 +345,18 @@ class KimiSoul:
         if isinstance(ask_tool, AskUserQuestion):
             ask_tool.bind_approval(self._approval.is_yolo)
 
+    def sync_dream_memory_tool_visibility(self, *, client_supports_dream_mode: bool) -> None:
+        """Hide Dream memory tools unless the client supports and enabled Dream mode."""
+        if not isinstance(self._agent.toolset, KimiToolset):
+            return
+
+        visible = client_supports_dream_mode and self._dream_mode
+        for name in ("WriteOptimizationMemory", "WriteEnvironmentDebugMemory"):
+            if visible:
+                self._agent.toolset.unhide(name)
+            else:
+                self._agent.toolset.hide(name)
+
     def _ensure_plan_session_id(self) -> None:
         """Allocate a stable plan session ID on first activation."""
         if self._plan_session_id is None:
@@ -344,6 +388,16 @@ class KimiSoul:
         self._runtime.session.state.plan_mode = self._plan_mode
         self._runtime.session.save_state()
         return self._plan_mode
+
+    def _set_dream_mode(self, enabled: bool, *, source: Literal["manual"]) -> bool:
+        """Update Dream mode state for manual/UI toggles."""
+        if enabled == self._dream_mode:
+            return self._dream_mode
+        self._dream_mode = enabled
+        self._pending_dream_activation_injection = enabled and source == "manual"
+        self._runtime.session.state.dream_mode = self._dream_mode
+        self._runtime.session.save_state()
+        return self._dream_mode
 
     def get_plan_file_path(self) -> Path | None:
         """Get the plan file path for the current session."""
@@ -388,6 +442,10 @@ class KimiSoul:
         """
         return self._set_plan_mode(enabled, source="manual")
 
+    async def set_dream_mode_from_manual(self, enabled: bool) -> bool:
+        """Set Dream mode to a specific state from UI/manual entry points."""
+        return self._set_dream_mode(enabled, source="manual")
+
     def schedule_plan_activation_reminder(self) -> None:
         """Schedule a plan-mode activation reminder for the next turn.
 
@@ -403,6 +461,13 @@ class KimiSoul:
         if not self._plan_mode or not self._pending_plan_activation_injection:
             return False
         self._pending_plan_activation_injection = False
+        return True
+
+    def consume_pending_dream_activation_injection(self) -> bool:
+        """Consume the next-step Dream activation reminder scheduled by a manual toggle."""
+        if not self._dream_mode or not self._pending_dream_activation_injection:
+            return False
+        self._pending_dream_activation_injection = False
         return True
 
     @property
@@ -561,6 +626,8 @@ class KimiSoul:
             turn_started = True
             user_message = Message(role="user", content=user_input)
             text_input = user_message.extract_text(" ").strip()
+            dream_hook_start_index = len(self._context.history)
+            self._dream_memory_hook_cursor = dream_hook_start_index
 
             if command_call := parse_slash_command_call(text_input):
                 command = self._find_slash_command(command_call.name)
@@ -599,6 +666,12 @@ class KimiSoul:
                             self._stop_hook_active = False
                         break
 
+            await self._run_dream_memory_hook_and_advance(
+                self._dream_memory_hook_cursor
+                if self._dream_memory_hook_cursor is not None
+                else dream_hook_start_index
+            )
+
             wire_send(TurnEnd())
             turn_finished = True
 
@@ -628,6 +701,7 @@ class KimiSoul:
         finally:
             if turn_started and not turn_finished:
                 wire_send(TurnEnd())
+            self._dream_memory_hook_cursor = None
             if approval_source_token is not None:
                 reset_current_approval_source(approval_source_token)
 
@@ -843,6 +917,7 @@ class KimiSoul:
                 raise
 
             if step_outcome is not None:
+                await self._run_periodic_dream_memory_hook(step_no)
                 has_steers = await self._consume_pending_steers()
                 if has_steers:
                     continue  # steers injected, force another LLM step
@@ -862,6 +937,8 @@ class KimiSoul:
                 await self._context.revert_to(back_to_the_future.checkpoint_id)
                 await self._checkpoint()
                 await self._context.append_message(back_to_the_future.messages)
+            else:
+                await self._run_periodic_dream_memory_hook(step_no)
 
             # Consume any pending steers between steps
             await self._consume_pending_steers()
@@ -953,7 +1030,10 @@ class KimiSoul:
             output_tokens=usage.output if usage else "?",
         )
         status_update = StatusUpdate(
-            token_usage=usage, message_id=result.id, plan_mode=self._plan_mode
+            token_usage=usage,
+            message_id=result.id,
+            plan_mode=self._plan_mode,
+            dream_mode=self._dream_mode,
         )
         if usage is not None:
             # mark the token count for the context before the step
@@ -1045,6 +1125,93 @@ class KimiSoul:
         )
         await self._context.append_message(tool_messages)
         # token count of tool results are not available yet
+
+    async def _run_periodic_dream_memory_hook(self, step_no: int) -> None:
+        """Run the Dream hook every N agent steps during long turns."""
+        if step_no % DREAM_MEMORY_STEP_INTERVAL != 0:
+            return
+        if self._dream_memory_hook_cursor is None:
+            return
+        await self._run_dream_memory_hook_and_advance(self._dream_memory_hook_cursor)
+
+    async def _run_dream_memory_hook_and_advance(self, start_index: int) -> None:
+        if await self._run_dream_memory_post_turn_hook(start_index):
+            self._dream_memory_hook_cursor = len(self._context.history)
+
+    async def _run_dream_memory_post_turn_hook(self, turn_start_index: int) -> bool:
+        """Force a specialist memory extraction pass after a Dream-mode turn."""
+        if not self._dream_mode or self._runtime.llm is None:
+            return False
+
+        turn_messages = self._context.history[turn_start_index:]
+        if not turn_messages:
+            return False
+
+        turn_text = self._format_dream_memory_hook_turn(turn_messages)
+        if not turn_text.strip():
+            return False
+
+        toolset = KimiToolset()
+        toolset.add(WriteOptimizationMemory())
+        toolset.add(WriteEnvironmentDebugMemory())
+        history = [
+            Message(
+                role="user",
+                content=[
+                    TextPart(
+                        text=(
+                            "Dream memory post-turn hook input follows. Extract only reusable "
+                            "specialist memories that are supported by this completed turn.\n\n"
+                            f"Session ID: {self._runtime.session.id}\n\n"
+                            f"{turn_text}"
+                        )
+                    )
+                ],
+            )
+        ]
+
+        async def _run_hook_once() -> StepResult:
+            return await kosong.step(
+                self._runtime.llm.chat_provider,
+                DREAM_MEMORY_HOOK_SYSTEM_PROMPT,
+                toolset,
+                history,
+            )
+
+        try:
+            result = await self._run_with_connection_recovery(
+                "dream_memory_post_turn_hook",
+                _run_hook_once,
+                chat_provider=self._runtime.llm.chat_provider,
+            )
+            tool_results = await result.tool_results()
+        except Exception as exc:
+            logger.warning("Dream memory post-turn hook failed: {}", exc)
+            return False
+
+        written = sum(
+            1 for item in tool_results if not bool(getattr(item.return_value, "is_error", True))
+        )
+        if written:
+            logger.info("Dream memory post-turn hook wrote {count} memories", count=written)
+        return True
+
+    @staticmethod
+    def _format_dream_memory_hook_turn(messages: Sequence[Message]) -> str:
+        lines: list[str] = ["Completed turn transcript:"]
+        for message in messages:
+            text = message.extract_text("\n").strip()
+            if text:
+                lines.append(f"\n[{message.role}]\n{text}")
+            if message.tool_calls:
+                calls = ", ".join(call.function.name for call in message.tool_calls)
+                if calls:
+                    lines.append(f"\n[{message.role} tool_calls]\n{calls}")
+
+        payload = "\n".join(lines).strip()
+        if len(payload) <= DREAM_MEMORY_HOOK_MAX_CHARS:
+            return payload
+        return payload[-DREAM_MEMORY_HOOK_MAX_CHARS:]
 
     async def compact_context(self, custom_instruction: str = "") -> None:
         """

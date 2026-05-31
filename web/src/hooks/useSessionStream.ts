@@ -117,6 +117,7 @@ import type { ChatStatus, ToolUIPart } from "ai";
 import type { LiveMessage, MessageAttachmentPart, SubagentStep } from "./types";
 import type { SessionStatus } from "@/lib/api/models";
 import { getAuthToken } from "@/lib/auth";
+import { removeCompactionIndicator } from "./compactionMessages";
 import {
   type ContentPart,
   type TokenUsage,
@@ -242,6 +243,10 @@ type UseSessionStreamReturn = {
   planMode: boolean;
   /** Set plan mode via silent RPC (no context message) */
   sendSetPlanMode: (enabled: boolean) => void;
+  /** Whether Dream mode is active */
+  dreamMode: boolean;
+  /** Set Dream mode via silent RPC (no context message) */
+  sendSetDreamMode: (enabled: boolean) => void;
   /** Available slash commands from the server */
   slashCommands: SlashCommandDef[];
 };
@@ -286,6 +291,7 @@ export function useSessionStream(
   const [contextUsage, setContextUsage] = useState(0);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [planMode, setPlanMode] = useState(false);
+  const [dreamMode, setDreamMode] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -853,6 +859,7 @@ export function useSessionStream(
     setContextUsage(0);
     setTokenUsage(null);
     setPlanMode(false);
+    setDreamMode(false);
     setError(null);
     setSessionStatus(null);
     lastStatusSeqRef.current = null;
@@ -1735,6 +1742,11 @@ export function useSessionStream(
             setPlanMode(nextPlanMode);
           }
 
+          const nextDreamMode = event.payload.dream_mode;
+          if (typeof nextDreamMode === "boolean") {
+            setDreamMode(nextDreamMode);
+          }
+
           // If we have a message_id, create a special message to display it
           const messageId = event.payload.message_id;
           if (messageId) {
@@ -1892,19 +1904,7 @@ export function useSessionStream(
         case "CompactionEnd": {
           const compactMsgId = compactionMessageIdRef.current;
           compactionMessageIdRef.current = null;
-          // Clear old messages after compaction, only keep the current turn
-          // Also remove the compaction indicator message
-          setMessages((prev) => {
-            let lastUserMsgIndex = -1;
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].role === "user") {
-                lastUserMsgIndex = i;
-                break;
-              }
-            }
-            const kept = lastUserMsgIndex >= 0 ? prev.slice(lastUserMsgIndex) : [];
-            return compactMsgId ? kept.filter((m) => m.id !== compactMsgId) : kept;
-          });
+          setMessages((prev) => removeCompactionIndicator(prev, compactMsgId));
           break;
         }
 
@@ -1985,6 +1985,7 @@ export function useSessionStream(
         capabilities: {
           supports_question: true,
           supports_plan_mode: true,
+          supports_dream_mode: true,
         },
       },
     };
@@ -2827,6 +2828,20 @@ export function useSessionStream(
     wsRef.current.send(JSON.stringify(message));
   }, []);
 
+  // Set Dream mode via silent RPC (no context message)
+  const sendSetDreamMode = useCallback((enabled: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const message: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      method: "set_dream_mode",
+      id: uuidV4(),
+      params: { enabled },
+    };
+    wsRef.current.send(JSON.stringify(message));
+  }, []);
+
   // Auto-connect when sessionId changes
   useLayoutEffect(() => {
     /**
@@ -2911,6 +2926,8 @@ export function useSessionStream(
     error,
     planMode,
     sendSetPlanMode,
+    dreamMode,
+    sendSetDreamMode,
     slashCommands,
   };
 }

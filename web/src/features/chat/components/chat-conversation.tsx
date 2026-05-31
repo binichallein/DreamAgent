@@ -172,7 +172,7 @@ export function ChatConversation({
         ) : emptySessionState ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-muted-foreground">
-              Start a conversation...
+              开始对话。
             </p>
           </div>
         ) : null

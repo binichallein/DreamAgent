@@ -131,6 +131,7 @@ export type StatusUpdateEvent = {
     token_usage?: TokenUsage | null;
     message_id?: string;
     plan_mode?: boolean | null;
+    dream_mode?: boolean | null;
   };
 };
 

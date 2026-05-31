@@ -51,6 +51,7 @@ from .jsonrpc import (
     JSONRPCPromptMessage,
     JSONRPCReplayMessage,
     JSONRPCRequestMessage,
+    JSONRPCSetDreamModeMessage,
     JSONRPCSetPlanModeMessage,
     JSONRPCSteerMessage,
     JSONRPCSuccessResponse,
@@ -100,6 +101,8 @@ class WireServer:
         """Whether the Wire client supports QuestionRequest."""
         self._client_supports_plan_mode: bool = False
         """Whether the Wire client supports plan mode."""
+        self._client_supports_dream_mode: bool = False
+        """Whether the Wire client supports Dream memory writing mode."""
         self._initialized: bool = False
         self._root_hub_queue: Queue[Any] | None = None
         self._root_hub_task: asyncio.Task[None] | None = None
@@ -365,6 +368,8 @@ class WireServer:
                     resp = await self._handle_steer(msg)
                 case JSONRPCSetPlanModeMessage():
                     resp = await self._handle_set_plan_mode(msg)
+                case JSONRPCSetDreamModeMessage():
+                    resp = await self._handle_set_dream_mode(msg)
                 case JSONRPCCancelMessage():
                     resp = await self._handle_cancel(msg)
                 case JSONRPCSuccessResponse() | JSONRPCErrorResponse():
@@ -529,10 +534,12 @@ class WireServer:
         if msg.params.capabilities is not None:
             self._client_supports_question = msg.params.capabilities.supports_question
             self._client_supports_plan_mode = msg.params.capabilities.supports_plan_mode
+            self._client_supports_dream_mode = msg.params.capabilities.supports_dream_mode
 
         if toolset is not None:
             self._sync_ask_user_tool_visibility(toolset)
             self._sync_plan_mode_tool_visibility(toolset)
+            self._sync_dream_memory_tool_visibility(toolset)
 
         self._initialized = True
         if self._approval_runtime is not None:
@@ -599,6 +606,17 @@ class WireServer:
             logger.info(
                 "Hide plan mode tools: client does not support plan mode",
             )
+
+    def _sync_dream_memory_tool_visibility(self, toolset: KimiToolset) -> None:
+        """Hide or unhide Dream memory tools based on client capabilities and mode."""
+        if isinstance(self._soul, KimiSoul):
+            self._soul.sync_dream_memory_tool_visibility(
+                client_supports_dream_mode=self._client_supports_dream_mode
+            )
+            return
+
+        for name in ("WriteOptimizationMemory", "WriteEnvironmentDebugMemory"):
+            toolset.hide(name)
 
     def _apply_wire_client_info(self, client: ClientInfo | None) -> None:
         if client is not None:
@@ -775,6 +793,31 @@ class WireServer:
         return JSONRPCSuccessResponse(
             id=msg.id,
             result={"status": "ok", "plan_mode": new_state},
+        )
+
+    async def _handle_set_dream_mode(
+        self, msg: JSONRPCSetDreamModeMessage
+    ) -> JSONRPCSuccessResponse | JSONRPCErrorResponse:
+        if not isinstance(self._soul, KimiSoul):
+            return JSONRPCErrorResponse(
+                id=msg.id,
+                error=JSONRPCErrorObject(
+                    code=ErrorCodes.INVALID_STATE,
+                    message="Dream mode is not supported",
+                ),
+            )
+
+        new_state = await self._soul.set_dream_mode_from_manual(msg.params.enabled)
+        self._soul.sync_dream_memory_tool_visibility(
+            client_supports_dream_mode=self._client_supports_dream_mode
+        )
+
+        status = StatusUpdate(dream_mode=new_state)
+        await self._send_msg(JSONRPCEventMessage(params=status))
+        await self._soul.wire_file.append_message(status)
+        return JSONRPCSuccessResponse(
+            id=msg.id,
+            result={"status": "ok", "dream_mode": new_state},
         )
 
     async def _handle_replay(

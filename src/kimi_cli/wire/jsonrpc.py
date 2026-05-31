@@ -89,6 +89,8 @@ class ClientCapabilities(BaseModel):
     """Whether the client can handle QuestionRequest messages."""
     supports_plan_mode: bool = False
     """Whether the client supports plan mode (EnterPlanMode / ExitPlanMode)."""
+    supports_dream_mode: bool = False
+    """Whether the client supports Dream memory writing mode."""
 
 
 class WireHookSubscription(BaseModel):
@@ -161,6 +163,18 @@ class JSONRPCSetPlanModeMessage(_MessageBase):
     params: _SetPlanModeParams
 
 
+class _SetDreamModeParams(BaseModel):
+    enabled: bool
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class JSONRPCSetDreamModeMessage(_MessageBase):
+    method: Literal["set_dream_mode"] = "set_dream_mode"
+    id: str
+    params: _SetDreamModeParams
+
+
 class JSONRPCCancelMessage(_MessageBase):
     method: Literal["cancel"] = "cancel"
     id: str
@@ -212,10 +226,19 @@ type JSONRPCInMessage = (
     | JSONRPCSteerMessage
     | JSONRPCReplayMessage
     | JSONRPCSetPlanModeMessage
+    | JSONRPCSetDreamModeMessage
     | JSONRPCCancelMessage
 )
 JSONRPCInMessageAdapter = TypeAdapter[JSONRPCInMessage](JSONRPCInMessage)
-JSONRPC_IN_METHODS = {"initialize", "prompt", "steer", "replay", "set_plan_mode", "cancel"}
+JSONRPC_IN_METHODS = {
+    "initialize",
+    "prompt",
+    "steer",
+    "replay",
+    "set_plan_mode",
+    "set_dream_mode",
+    "cancel",
+}
 
 type JSONRPCOutMessage = (
     JSONRPCSuccessResponse

@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatStatus } from "ai";
 import { PromptInputProvider } from "@ai-elements";
 import { toast } from "sonner";
-import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
+import { LogOut, PanelLeftOpen, PanelLeftClose, Settings } from "lucide-react";
 import { cn } from "./lib/utils";
 import { ResizablePanel, ResizablePanelGroup } from "./components/ui/resizable";
 import { ChatWorkspaceContainer } from "./features/chat/chat-workspace-container";
+import { DreamPage } from "./features/dream/dream-page";
+import { EvoInferPage } from "./features/evoinfer/evoinfer-page";
 import { SessionsSidebar } from "./features/sessions/sessions";
 import { CreateSessionDialog } from "./features/sessions/create-session-dialog";
 import { Toaster } from "./components/ui/sonner";
@@ -39,9 +41,10 @@ function updateUrlWithSession(sessionId: string | null): void {
 }
 
 const SIDEBAR_COLLAPSED_SIZE = 48;
-const SIDEBAR_MIN_SIZE = 200;
-const SIDEBAR_DEFAULT_SIZE = 260;
+const SIDEBAR_MIN_SIZE = 208;
+const SIDEBAR_DEFAULT_SIZE = 208;
 const SIDEBAR_ANIMATION_MS = 250;
+type ActiveView = "chat" | "dream" | "evoinfer";
 
 function App() {
   // Initialize theme on app startup
@@ -101,6 +104,7 @@ function App() {
   );
 
   const [streamStatus, setStreamStatus] = useState<ChatStatus>("ready");
+  const [activeView, setActiveView] = useState<ActiveView>("chat");
 
   useEffect(() => {
     const token = consumeAuthTokenFromUrl();
@@ -317,11 +321,27 @@ function App() {
 
   const handleSelectSession = useCallback(
     (sessionId: string) => {
+      setActiveView("chat");
       selectSession(sessionId);
       setIsMobileSidebarOpen(false);
     },
     [selectSession],
   );
+
+  const handleSelectChat = useCallback(() => {
+    setActiveView("chat");
+    setIsMobileSidebarOpen(false);
+  }, []);
+
+  const handleSelectDream = useCallback(() => {
+    setActiveView("dream");
+    setIsMobileSidebarOpen(false);
+  }, []);
+
+  const handleSelectEvoInfer = useCallback(() => {
+    setActiveView("evoinfer");
+    setIsMobileSidebarOpen(false);
+  }, []);
 
   const handleRefreshSessions = useCallback(async () => {
     await refreshSessions();
@@ -386,10 +406,20 @@ function App() {
     />
   );
 
+  const renderMainPanel = () => {
+    if (activeView === "evoinfer") {
+      return <EvoInferPage />;
+    }
+    if (activeView === "dream") {
+      return <DreamPage />;
+    }
+    return renderChatPanel();
+  };
+
   return (
     <PromptInputProvider>
-      <div className="box-border flex h-[100dvh] flex-col bg-background text-foreground px-[calc(0.75rem+var(--safe-left))] pr-[calc(0.75rem+var(--safe-right))] pt-[calc(0.75rem+var(--safe-top))] pb-1 lg:pb-[calc(0.75rem+var(--safe-bottom))] max-lg:h-[100svh] max-lg:overflow-hidden">
-        <div className="mx-auto flex h-full min-h-0 w-full flex-1 flex-col gap-2 max-w-none">
+      <div className="box-border flex h-[100dvh] flex-col bg-background text-foreground max-lg:h-[100svh] max-lg:overflow-hidden">
+        <div className="mx-auto flex h-full min-h-0 w-full flex-1 flex-col max-w-none">
           {isDesktop ? (
             <ResizablePanelGroup
               orientation="horizontal"
@@ -405,7 +435,7 @@ function App() {
                 elementRef={sidebarElementRef}
                 panelRef={sidebarPanelRef}
                 onResize={handleSidebarResize}
-                className={cn("relative min-h-0 border-r pl-0.5 pr-2 overflow-hidden")}
+                className={cn("relative min-h-0 overflow-hidden border-r bg-sidebar")}
               >
                 {/* Collapsed sidebar - vertical strip with logo and expand button */}
                 <div
@@ -416,20 +446,9 @@ function App() {
                       : "opacity-0 -translate-x-2 pointer-events-none select-none",
                   )}
                 >
-                  <a
-                    href="https://www.kimi.com/code"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:opacity-80 transition-opacity"
-                  >
-                    <img
-                      src="/logo.png"
-                      alt="Kimi"
-                      width={24}
-                      height={24}
-                      className="size-6"
-                    />
-                  </a>
+                  <div className="flex size-6 items-center justify-center rounded-full bg-[#86b817] text-xs font-semibold text-white">
+                    E
+                  </div>
                   <button
                     type="button"
                     aria-label="Expand sidebar"
@@ -460,10 +479,14 @@ function App() {
                     onRefreshSessions={handleRefreshSessions}
                     onRefreshArchivedSessions={refreshArchivedSessions}
                     onLoadMoreSessions={loadMoreSessions}
-                    onLoadMoreArchivedSessions={loadMoreArchivedSessions}
-                    onOpenCreateDialog={handleOpenCreateDialog}
-                    onCreateSessionInDir={handleCreateSessionInDir}
-                    streamStatus={streamStatus}
+	                    onLoadMoreArchivedSessions={loadMoreArchivedSessions}
+	                    onOpenCreateDialog={handleOpenCreateDialog}
+	                    onCreateSessionInDir={handleCreateSessionInDir}
+	                    activeView={activeView}
+	                    onSelectChat={handleSelectChat}
+	                    onSelectDream={handleSelectDream}
+	                    onSelectEvoInfer={handleSelectEvoInfer}
+	                    streamStatus={streamStatus}
                     selectedSessionId={selectedSessionId}
                     sessions={sessionSummaries}
                     archivedSessions={archivedSessionSummaries}
@@ -475,31 +498,45 @@ function App() {
                     searchQuery={searchQuery}
                     onSearchQueryChange={handleSearchQueryChange}
                   />
-                  <div className="mt-auto flex items-center justify-between pl-2 pb-2 pr-2">
-                    <div className="flex items-center gap-2">
-                      <ThemeToggle />
-                    </div>
+                  <div className="mt-auto border-t px-2 py-2">
                     <button
                       type="button"
-                      aria-label="Collapse sidebar"
-                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-                      onClick={handleCollapseSidebar}
+                      className="flex h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
                     >
-                      <PanelLeftClose className="size-4" />
+                      <Settings className="size-4" />
+                      <span>设置</span>
                     </button>
+                    <button
+                      type="button"
+                      className="flex h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-red-700 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                    >
+                      <LogOut className="size-4" />
+                      <span>退出登录</span>
+                    </button>
+                    <div className="mt-1 flex items-center justify-between">
+                      <ThemeToggle />
+                      <button
+                        type="button"
+                        aria-label="Collapse sidebar"
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+                        onClick={handleCollapseSidebar}
+                      >
+                        <PanelLeftClose className="size-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </ResizablePanel>
 
-              {/* Main Chat Area */}
-              <ResizablePanel id="chat" className="relative min-h-0 flex justify-center flex-1">
-                {renderChatPanel()}
-              </ResizablePanel>
+	              {/* Main Chat Area */}
+	              <ResizablePanel id="chat" className="relative min-h-0 flex justify-center flex-1">
+	                {renderMainPanel()}
+	              </ResizablePanel>
             </ResizablePanelGroup>
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col">
-              {renderChatPanel()}
-            </div>
+	          ) : (
+	            <div className="flex min-h-0 flex-1 flex-col">
+	              {renderMainPanel()}
+	            </div>
           )}
         </div>
       </div>
@@ -539,10 +576,14 @@ function App() {
                 onRefreshSessions={handleRefreshSessions}
                 onRefreshArchivedSessions={refreshArchivedSessions}
                 onLoadMoreSessions={loadMoreSessions}
-                onLoadMoreArchivedSessions={loadMoreArchivedSessions}
-                onOpenCreateDialog={handleOpenCreateDialog}
-                onCreateSessionInDir={handleCreateSessionInDir}
-                onClose={handleCloseMobileSidebar}
+	                onLoadMoreArchivedSessions={loadMoreArchivedSessions}
+	                onOpenCreateDialog={handleOpenCreateDialog}
+	                onCreateSessionInDir={handleCreateSessionInDir}
+	                activeView={activeView}
+	                onSelectChat={handleSelectChat}
+	                onSelectDream={handleSelectDream}
+	                onSelectEvoInfer={handleSelectEvoInfer}
+	                onClose={handleCloseMobileSidebar}
                 streamStatus={streamStatus}
                 selectedSessionId={selectedSessionId}
                 sessions={sessionSummaries}

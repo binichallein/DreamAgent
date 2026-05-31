@@ -37,7 +37,13 @@ import {
 import { cn } from "@/lib/utils";
 import { IMAGE_CONFIG, VIDEO_CONFIG, MEDIA_CONFIG } from "@/config/media";
 import { useVideoThumbnail } from "@/hooks/useVideoThumbnail";
-import type { ChatStatus, FileUIPart } from "ai";
+import type { ChatStatus } from "ai";
+import {
+  createPromptInputAttachment,
+  type PromptInputAttachmentItem,
+  type PromptInputSubmittedFile,
+  preparePromptInputFiles,
+} from "./prompt-input-files";
 import {
   CornerDownLeftIcon,
   ImageIcon,
@@ -78,7 +84,7 @@ import {
 // ============================================================================
 
 export type AttachmentsContext = {
-  files: (FileUIPart & { id: string })[];
+  files: PromptInputAttachmentItem[];
   add: (files: File[] | FileList) => void;
   remove: (id: string) => void;
   clear: () => void;
@@ -154,7 +160,7 @@ export function PromptInputProvider({
 
   // ----- attachments state (global when wrapped)
   const [attachments, setAttachments] = useState<
-    (FileUIPart & { id: string })[]
+    PromptInputAttachmentItem[]
   >([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const openRef = useRef<() => void>(() => {});
@@ -168,11 +174,7 @@ export function PromptInputProvider({
     setAttachments((prev) =>
       prev.concat(
         incoming.map((file) => ({
-          id: nanoid(),
-          type: "file" as const,
-          url: URL.createObjectURL(file),
-          mediaType: file.type,
-          filename: file.name,
+          ...createPromptInputAttachment(file, nanoid()),
         })),
       ),
     );
@@ -265,7 +267,7 @@ export const usePromptInputAttachments = () => {
 };
 
 export type PromptInputAttachmentProps = HTMLAttributes<HTMLDivElement> & {
-  data: FileUIPart & { id: string };
+  data: PromptInputAttachmentItem;
   className?: string;
 };
 
@@ -361,7 +363,7 @@ export function PromptInputAttachment({
       <HoverCardTrigger asChild>
         <div
           className={cn(
-            "group relative flex h-8 cursor-default select-none items-center gap-1.5 rounded-md border border-border px-1.5 font-medium text-sm transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+            "group relative flex h-8 max-w-[200px] cursor-default select-none items-center gap-1.5 rounded-md border border-border px-1.5 font-medium text-sm transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
             className,
           )}
           key={data.id}
@@ -415,7 +417,7 @@ export type PromptInputAttachmentsProps = Omit<
   HTMLAttributes<HTMLDivElement>,
   "children"
 > & {
-  children: (attachment: FileUIPart & { id: string }) => ReactNode;
+  children: (attachment: PromptInputAttachmentItem) => ReactNode;
 };
 
 export function PromptInputAttachments({
@@ -468,7 +470,7 @@ export const PromptInputActionAddAttachments = ({
 
 export type PromptInputMessage = {
   text: string;
-  files: FileUIPart[];
+  files: PromptInputSubmittedFile[];
 };
 
 export type PromptInputProps = Omit<
@@ -516,7 +518,7 @@ export const PromptInput = ({
   const formRef = useRef<HTMLFormElement | null>(null);
 
   // ----- Local attachments (only used when no provider)
-  const [items, setItems] = useState<(FileUIPart & { id: string })[]>([]);
+  const [items, setItems] = useState<PromptInputAttachmentItem[]>([]);
   const files = usingProvider ? controller.attachments.files : items;
 
   const openFileDialogLocal = useCallback(() => {
@@ -648,15 +650,9 @@ export const PromptInput = ({
           });
         }
 
-        const next: (FileUIPart & { id: string })[] = [];
+        const next: PromptInputAttachmentItem[] = [];
         for (const file of capped) {
-          next.push({
-            id: nanoid(),
-            type: "file",
-            url: URL.createObjectURL(file),
-            mediaType: file.type,
-            filename: file.name,
-          });
+          next.push(createPromptInputAttachment(file, nanoid()));
         }
         return prev.concat(next);
       });
@@ -801,17 +797,6 @@ export const PromptInput = ({
     }
   };
 
-  const convertBlobUrlToDataUrl = async (url: string): Promise<string> => {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  };
-
   const ctx = useMemo<AttachmentsContext>(
     () => ({
       files: files.map((item) => ({ ...item, id: item.id })),
@@ -841,52 +826,32 @@ export const PromptInput = ({
       form.reset();
     }
 
-    // Convert blob URLs to data URLs asynchronously
-    Promise.all(
-      files.map(async ({ id, ...item }) => {
-        if (item.url && item.url.startsWith("blob:")) {
-          return {
-            ...item,
-            url: await convertBlobUrlToDataUrl(item.url),
-          };
-        }
-        return item;
-      }),
-    )
-      .then((convertedFiles: FileUIPart[]) => {
-        try {
-          const result = onSubmit({ text, files: convertedFiles }, event);
+    try {
+      const submittedFiles = preparePromptInputFiles(files);
+      const result = onSubmit({ text, files: submittedFiles }, event);
 
-          // Handle both sync and async onSubmit
-          if (result instanceof Promise) {
-            result
-              .then(() => {
-                clear();
-                if (usingProvider) {
-                  controller.textInput.clear();
-                }
-              })
-              .catch(() => {
-                // Don't clear on error - user may want to retry
-              });
-          } else {
-            // Sync function completed without throwing, clear attachments
+      // Handle both sync and async onSubmit
+      if (result instanceof Promise) {
+        result
+          .then(() => {
             clear();
             if (usingProvider) {
               controller.textInput.clear();
             }
-          }
-        } catch {
-          // Don't clear on error - user may want to retry
+          })
+          .catch(() => {
+            // Don't clear on error - user may want to retry
+          });
+      } else {
+        // Sync function completed without throwing, clear attachments
+        clear();
+        if (usingProvider) {
+          controller.textInput.clear();
         }
-      })
-      .catch((error) => {
-        console.error("[PromptInput] Failed to convert files:", error);
-        onError?.({
-          code: "max_file_size",
-          message: "Failed to process file. Please try a smaller file.",
-        });
-      });
+      }
+    } catch {
+      // Don't clear on error - user may want to retry
+    }
   };
 
   // Render with or without local provider

@@ -25,8 +25,16 @@ import { useFileMentions } from "../useFileMentions";
 import { SlashCommandMenu } from "../slash-command-menu";
 import { useSlashCommands, type SlashCommandDef } from "../useSlashCommands";
 import { PromptToolbar } from "./prompt-toolbar";
-import { ArrowUpIcon, Loader2Icon, SquareIcon, Maximize2Icon, Minimize2Icon } from "lucide-react";
+import {
+  ArrowUpIcon,
+  Loader2Icon,
+  MicIcon,
+  SquareIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+} from "lucide-react";
 import { toast } from "sonner";
+import { transcribeSpeechBlob } from "@/lib/speech";
 import {
   Tooltip,
   TooltipContent,
@@ -40,10 +48,13 @@ import {
   type SyntheticEvent,
   memo,
   useCallback,
+  useEffect,
   useRef,
   useState,
 } from "react";
 import type { SessionFileEntry } from "@/hooks/useSessions";
+
+const TRAILING_WHITESPACE_REGEX = /\s$/;
 
 type ChatPromptComposerProps = {
   status: ChatStatus;
@@ -64,6 +75,8 @@ type ChatPromptComposerProps = {
   slashCommands?: SlashCommandDef[];
   planMode?: boolean;
   onPlanModeChange?: (enabled: boolean) => void;
+  dreamMode?: boolean;
+  onDreamModeChange?: (enabled: boolean) => void;
   activityStatus?: ActivityDetail;
   usagePercent?: number;
   usedTokens?: number;
@@ -87,6 +100,8 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
   slashCommands = [],
   planMode = false,
   onPlanModeChange,
+  dreamMode = false,
+  onDreamModeChange,
   activityStatus,
   usagePercent,
   usedTokens,
@@ -96,7 +111,13 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
   const promptController = usePromptInputController();
   const attachmentContext = usePromptInputAttachments();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordedMimeTypeRef = useRef("audio/webm");
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const {
     isOpen: isMentionOpen,
@@ -191,6 +212,153 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
     setIsExpanded((prev) => !prev);
   }, []);
 
+  const stopMediaStream = useCallback(() => {
+    for (const track of mediaStreamRef.current?.getTracks() ?? []) {
+      track.stop();
+    }
+    mediaStreamRef.current = null;
+  }, []);
+
+  const appendTranscript = useCallback(
+    (transcript: string) => {
+      const cleaned = transcript.trim();
+      if (!cleaned) {
+        toast.info("No speech detected");
+        return;
+      }
+
+      const current = promptController.textInput.value;
+      const separator =
+        current.length > 0 && !TRAILING_WHITESPACE_REGEX.test(current)
+          ? " "
+          : "";
+      const nextValue = `${current}${separator}${cleaned}`;
+      promptController.textInput.setInput(nextValue);
+
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) {
+          return;
+        }
+        textarea.focus();
+        textarea.setSelectionRange(nextValue.length, nextValue.length);
+        handleMentionCaretChange(nextValue.length);
+        handleSlashCaretChange(nextValue.length);
+      });
+    },
+    [
+      promptController.textInput,
+      handleMentionCaretChange,
+      handleSlashCaretChange,
+    ],
+  );
+
+  const handleVoiceRecordingStop = useCallback(async () => {
+    const audioBlob = new Blob(audioChunksRef.current, {
+      type: recordedMimeTypeRef.current,
+    });
+    audioChunksRef.current = [];
+    setIsRecording(false);
+    mediaRecorderRef.current = null;
+    stopMediaStream();
+
+    if (audioBlob.size === 0) {
+      toast.info("No speech recorded");
+      return;
+    }
+
+    setIsTranscribing(true);
+    try {
+      const result = await transcribeSpeechBlob(audioBlob);
+      appendTranscript(result.text);
+    } catch (error) {
+      toast.error("Voice input failed", {
+        description:
+          error instanceof Error ? error.message : "Speech transcription failed",
+      });
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [appendTranscript, stopMediaStream]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      toast.error("Voice input is not available in this browser");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredMimeType =
+        MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : MediaRecorder.isTypeSupported("audio/webm")
+            ? "audio/webm"
+            : "";
+      const recorder = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+      recordedMimeTypeRef.current =
+        recorder.mimeType || preferredMimeType || "audio/webm";
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        handleVoiceRecordingStop().catch((error: unknown) => {
+          console.error("[ChatPromptComposer] Voice transcription failed", error);
+        });
+      };
+      recorder.onerror = () => {
+        setIsRecording(false);
+        stopMediaStream();
+        toast.error("Voice recording failed");
+      };
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      stopMediaStream();
+      toast.error("Microphone access failed", {
+        description:
+          error instanceof Error ? error.message : "Unable to start recording",
+      });
+    }
+  }, [handleVoiceRecordingStop, stopMediaStream]);
+
+  const handleToggleVoiceRecording = useCallback(() => {
+    if (isRecording) {
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      return;
+    }
+
+    startVoiceRecording().catch((error: unknown) => {
+      console.error("[ChatPromptComposer] Voice recording failed", error);
+    });
+  }, [isRecording, startVoiceRecording]);
+
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder?.state === "recording") {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      stopMediaStream();
+    };
+  }, [stopMediaStream]);
+
   return (
     <div className="w-full">
       <PromptToolbar
@@ -208,7 +376,7 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
       <PromptInput
         accept="*"
         className={cn(
-          "w-full [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-border",
+          "w-full [&_[data-slot=input-group]]:rounded-lg [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-border [&_[data-slot=input-group]]:bg-background [&_[data-slot=input-group]]:shadow-[0_1px_12px_rgba(15,23,42,0.08)]",
           planMode && "[&_[data-slot=input-group]]:border-dashed [&_[data-slot=input-group]]:!border-blue-200 dark:[&_[data-slot=input-group]]:!border-blue-600"
         )}
         multiple
@@ -255,14 +423,14 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
                 )}
                 placeholder={
                   !currentSession
-                    ? "Create a session to start..."
+                    ? "创建会话后开始..."
                     : isAwaitingIdle
                       ? isReplayingHistory
-                        ? "Connecting..."
-                        : "Starting environment..."
+                        ? "正在连接..."
+                        : "正在启动环境..."
                       : isStreaming
-                        ? "Add a follow-up message..."
-                        : "Ask anything, / for commands, @ to mention files"
+                        ? "继续输入..."
+                        : "回复助手....."
                 }
                 aria-busy={isUploading}
                 disabled={!canSendMessage || isUploading || !currentSession || isAwaitingIdle}
@@ -304,7 +472,12 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
         </PromptInputBody>
         <PromptInputFooter className="w-full gap-2 py-1 border-none bg-transparent shadow-none">
           <PromptInputTools className="flex-1 min-w-0 flex-wrap">
-            <GlobalConfigControls planMode={planMode} onPlanModeChange={onPlanModeChange} />
+            <GlobalConfigControls
+              planMode={planMode}
+              onPlanModeChange={onPlanModeChange}
+              dreamMode={dreamMode}
+              onDreamModeChange={onDreamModeChange}
+            />
           </PromptInputTools>
           {isStreaming ? (
             <div className="flex items-center gap-1.5 shrink-0">
@@ -338,16 +511,56 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
               </Tooltip>
             </div>
           ) : (
-            <PromptInputSubmit
-              status={isUploading ? "submitted" : status}
-              disabled={
-                !canSendMessage ||
-                isAwaitingIdle ||
-                isUploading ||
-                !currentSession
-              }
-              className="shrink-0"
-            />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PromptInputButton
+                    aria-label={isRecording ? "Stop voice input" : "Start voice input"}
+                    disabled={
+                      !canSendMessage ||
+                      isAwaitingIdle ||
+                      isUploading ||
+                      isTranscribing ||
+                      !currentSession
+                    }
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      handleToggleVoiceRecording();
+                    }}
+                    size="icon-sm"
+                    variant={isRecording ? "default" : "ghost"}
+                    className={cn(
+                      "shrink-0",
+                      isRecording && "animate-pulse",
+                    )}
+                  >
+                    {isTranscribing ? (
+                      <Loader2Icon className="size-4 animate-spin" />
+                    ) : (
+                      <MicIcon className="size-4" />
+                    )}
+                  </PromptInputButton>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isRecording
+                    ? "Stop voice input"
+                    : isTranscribing
+                      ? "Transcribing..."
+                      : "Voice input"}
+                </TooltipContent>
+              </Tooltip>
+              <PromptInputSubmit
+                status={isUploading ? "submitted" : status}
+                disabled={
+                  !canSendMessage ||
+                  isAwaitingIdle ||
+                  isUploading ||
+                  !currentSession
+                }
+                className="shrink-0"
+              />
+            </div>
           )}
         </PromptInputFooter>
       </PromptInput>

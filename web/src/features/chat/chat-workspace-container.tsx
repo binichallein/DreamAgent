@@ -11,8 +11,12 @@
  * on every update anyway.
  */
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatStatus, FileUIPart } from "ai";
-import type { PromptInputMessage } from "@ai-elements";
+import type { ChatStatus } from "ai";
+import {
+  getPromptInputUploadFile,
+  type PromptInputMessage,
+  type PromptInputSubmittedFile,
+} from "@ai-elements";
 import { toast } from "sonner";
 import type {
   Session,
@@ -124,6 +128,8 @@ export function ChatWorkspaceContainer({
     isReplayingHistory,
     planMode,
     sendSetPlanMode,
+    dreamMode,
+    sendSetDreamMode,
     slashCommands,
     error: streamError,
   } = sessionStream;
@@ -204,7 +210,7 @@ export function ChatWorkspaceContainer({
   }, [pendingMessage, selectedSessionId]);
 
   const uploadFilesToSession = useCallback(
-    async (targetSessionId: string, files: FileUIPart[]) => {
+    async (targetSessionId: string, files: PromptInputSubmittedFile[]) => {
       if (files.length === 0) {
         return 0;
       }
@@ -213,13 +219,7 @@ export function ChatWorkspaceContainer({
       try {
         const uploadResults = await Promise.all(
           files.map(async (filePart) => {
-            if (!filePart.url) return false;
-
-            const response = await fetch(filePart.url);
-            const blob = await response.blob();
-            const file = new File([blob], filePart.filename ?? "unnamed_file", {
-              type: filePart.mediaType ?? blob.type,
-            });
+            const file = await getPromptInputUploadFile(filePart);
 
             const uploadResult = await uploadSessionFile(targetSessionId, file);
             console.log(
@@ -317,6 +317,10 @@ export function ChatWorkspaceContainer({
     sendSetPlanMode(enabled);
   }, [sendSetPlanMode]);
 
+  const handleDreamModeChange = useCallback((enabled: boolean) => {
+    sendSetDreamMode(enabled);
+  }, [sendSetDreamMode]);
+
   const handleForkSession = useCallback(
     async (turnIndex: number) => {
       if (!(selectedSessionId && onForkSession)) {
@@ -387,6 +391,8 @@ export function ChatWorkspaceContainer({
       slashCommands={slashCommands}
       planMode={planMode}
       onPlanModeChange={handlePlanModeChange}
+      dreamMode={dreamMode}
+      onDreamModeChange={handleDreamModeChange}
       errorMessage={streamError?.message}
       onForkSession={onForkSession ? handleForkSession : undefined}
     />

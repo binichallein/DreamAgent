@@ -49,6 +49,11 @@ dev = [
     "ruff>=0.14.10",
 ]
 
+[project.optional-dependencies]
+web-stt = [
+    "faster-whisper>=1.1.1,<2.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.8.5,<0.10.0"]
 build-backend = "uv_build"

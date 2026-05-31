@@ -439,6 +439,8 @@ async def load_agent(
         logger.debug("Excluding tools: {tools}", tools=agent_spec.exclude_tools)
         tools = [tool for tool in tools if tool not in agent_spec.exclude_tools]
     toolset.load_tools(tools, tool_deps)
+    for tool_name in ("WriteOptimizationMemory", "WriteEnvironmentDebugMemory"):
+        toolset.hide(tool_name)
 
     # Load plugin tools
     from kimi_cli.plugin.manager import get_plugins_dir

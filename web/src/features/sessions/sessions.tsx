@@ -18,8 +18,6 @@ import {
   X,
   AlertTriangle,
   RefreshCw,
-  List,
-  FolderTree,
   ChevronDown,
   Pencil,
   Loader2,
@@ -28,9 +26,15 @@ import {
   CheckSquare,
   Square,
   PanelLeftClose,
+  Bot,
+  Circle,
+  Clock3,
+  Grid2X2,
+  MessageSquare,
+  BrainCircuit,
+  Sparkles,
 } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
-import { KimiCliBrand } from "@/components/kimi-cli-brand";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +44,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -54,6 +57,10 @@ import {
 } from "@/components/ui/collapsible";
 import { hasPlatformModifier, isMacOS } from "@/hooks/utils";
 import { cn, } from "@/lib/utils";
+import {
+  shouldCancelSessionTitleEdit,
+  shouldCommitSessionTitleEdit,
+} from "./session-title-edit";
 
 // Top-level regex constants for performance
 const NEWLINE_REGEX = /\r\n|\r|\n/;
@@ -75,7 +82,7 @@ type SessionGroup = {
   sessions: SessionSummary[];
 };
 
-const VIEW_MODE_KEY = "kimi-sessions-view-mode";
+const CHANNELS = ["# all", "# onboarding-lattice", "# papers-posttraining"];
 
 /**
  * Shorten a path to fit in limited space
@@ -114,6 +121,10 @@ type SessionsSidebarProps = {
   onCreateSessionInDir?: (workDir: string) => void;
   onClose?: () => void;
   streamStatus?: "ready" | "streaming" | "submitted" | "error";
+  activeView?: "chat" | "dream" | "evoinfer";
+  onSelectChat?: () => void;
+  onSelectDream?: () => void;
+  onSelectEvoInfer?: () => void;
 };
 
 type ContextMenuState = {
@@ -181,6 +192,10 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
   onOpenCreateDialog,
   onCreateSessionInDir,
   onClose,
+  activeView = "chat",
+  onSelectChat,
+  onSelectDream,
+  onSelectEvoInfer,
 }: SessionsSidebarProps): ReactElement {
   const minimumSpinMs = 600;
   const normalizeTitle = useCallback((t: string) => {
@@ -204,11 +219,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
   // Session search state
   const [sessionSearch, setSessionSearch] = useState(searchQuery);
 
-  // View mode state with localStorage persistence
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    const stored = localStorage.getItem(VIEW_MODE_KEY);
-    return stored === "grouped" ? "grouped" : "list";
-  });
+  const [viewMode] = useState<ViewMode>("list");
 
   // Archived section expanded state
   const [isArchivedExpanded, setIsArchivedExpanded] = useState(false);
@@ -302,12 +313,14 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
     return () => window.clearTimeout(handle);
   }, [sessionSearch, onSearchQueryChange]);
 
-  const handleViewModeChange = useCallback((mode: ViewMode) => {
-    setViewMode(mode);
-    localStorage.setItem(VIEW_MODE_KEY, mode);
-  }, []);
-
   const newSessionShortcutModifier = isMacOS() ? "Cmd" : "Ctrl";
+  const navItemClass = (selected: boolean) =>
+    cn(
+      "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors",
+      selected
+        ? "bg-secondary font-medium text-foreground"
+        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+    );
 
   // Enhanced search: support both title and workDir
   const filteredSessions = useMemo(() => {
@@ -457,6 +470,23 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
   const handleCancelEdit = () => {
     setEditingSessionId(null);
     setEditingTitle("");
+  };
+
+  const handleEditTitleKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
+    event.stopPropagation();
+    if (
+      shouldCommitSessionTitleEdit(event.key, event.nativeEvent.isComposing)
+    ) {
+      event.preventDefault();
+      handleSaveEdit();
+      return;
+    }
+    if (shouldCancelSessionTitleEdit(event.key)) {
+      event.preventDefault();
+      handleCancelEdit();
+    }
   };
 
   const openDeleteConfirm = useCallback(
@@ -610,25 +640,124 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
 
   return (
     <>
-      <aside className="flex h-full min-h-0 flex-col">
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
-          <div className="flex items-center justify-between px-3 pt-2">
-            <KimiCliBrand size="sm" showVersion={true} />
+      <aside className="flex h-full min-h-0 flex-col bg-sidebar text-sidebar-foreground">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="px-2 py-2">
+            <div className="flex h-8 items-center gap-2 px-1">
+              <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#86b817] text-[11px] font-semibold text-white">
+                E
+              </div>
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold">
+                EvoInfer
+              </span>
             {onClose && (
               <button
                 type="button"
                 aria-label="Close sidebar"
-                className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+                className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
                 onClick={onClose}
               >
                 <PanelLeftClose className="size-4" />
               </button>
             )}
+            </div>
+
+            <div className="mt-3 space-y-1">
+              <button
+                type="button"
+                className={navItemClass(activeView === "chat")}
+                onClick={onSelectChat}
+              >
+                <MessageSquare className="size-4 text-muted-foreground" />
+                <span>快速对话</span>
+              </button>
+              <button
+                type="button"
+                className={navItemClass(activeView === "evoinfer")}
+                onClick={onSelectEvoInfer}
+              >
+                <Sparkles className="size-4 text-muted-foreground" />
+                <span>EvoInfer</span>
+              </button>
+              <button
+                type="button"
+                className={navItemClass(activeView === "dream")}
+                onClick={onSelectDream}
+              >
+                <BrainCircuit className="size-4 text-muted-foreground" />
+                <span>Dream</span>
+              </button>
+              <label className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors focus-within:bg-secondary/70 hover:bg-secondary/60 hover:text-foreground">
+                <Search className="size-4 shrink-0" />
+                <input
+                  type="text"
+                  aria-label="搜索"
+                  placeholder="搜索"
+                  value={sessionSearch}
+                  onChange={(event) => setSessionSearch(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                />
+                {sessionSearch ? (
+                  <button
+                    type="button"
+                    onClick={() => setSessionSearch("")}
+                    className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
+              </label>
+              <button
+                type="button"
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              >
+                <Bot className="size-4" />
+                <span>技能</span>
+              </button>
+              <button
+                type="button"
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              >
+                <Grid2X2 className="size-4" />
+                <span>插件</span>
+              </button>
+              <button
+                type="button"
+                className="flex h-8 w-full items-center justify-between rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Clock3 className="size-4" />
+                  <span>自动化</span>
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  <Circle className="size-1.5 fill-emerald-500 text-emerald-500" />
+                  在线
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="px-3 pt-3">
+            <h4 className="text-[11px] font-medium normal-case tracking-normal text-muted-foreground">
+              频道
+            </h4>
+            <div className="mt-2 space-y-1">
+              {CHANNELS.map((channel) => (
+                <button
+                  key={channel}
+                  type="button"
+                  className="flex h-7 w-full items-center rounded-md px-1 text-left text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+                >
+                  {channel}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Sessions */}
-          <div className="flex items-center justify-between px-3 pt-3">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Sessions</h4>
+          <div className="flex items-center justify-between px-3 pt-4">
+            <h4 className="text-[11px] font-medium normal-case tracking-normal text-muted-foreground">会话</h4>
             <div className="flex items-center gap-1">
               <button
                 aria-label="Refresh sessions"
@@ -785,46 +914,6 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             </div>
           )}
 
-          {/* Session search and view toggle */}
-          {!isMultiSelectMode && (
-          <div className="px-2 flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-              <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search sessions..."
-                value={sessionSearch}
-                onChange={(e) => setSessionSearch(e.target.value)}
-                className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-8 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-              {sessionSearch && (
-                <button
-                  type="button"
-                  onClick={() => setSessionSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
-                >
-                  <X className="size-3.5" />
-                </button>
-              )}
-            </div>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={viewMode}
-              onValueChange={(value) => value && handleViewModeChange(value as ViewMode)}
-              className="shrink-0"
-            >
-              <ToggleGroupItem value="list" aria-label="List view" title="List view" className="h-8 w-8 px-0">
-                <List className="size-3.5" />
-              </ToggleGroupItem>
-              <ToggleGroupItem value="grouped" aria-label="Grouped view" title="Grouped by folder" className="h-8 w-8 px-0">
-                <FolderTree className="size-3.5" />
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </div>
-          )}
-
           <div className="flex-1 min-h-0 flex flex-col">
             <div className="flex-1 min-h-0">
             {viewMode === "grouped" ? (
@@ -892,38 +981,29 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                 return (
                                   <li key={session.id}>
                                     <div className="flex w-full items-center gap-2">
-                                      <button
-                                        className={`flex-1 min-w-0 cursor-pointer text-left rounded-lg px-3 py-2 transition-colors ${
-                                          isActive
-                                            ? "bg-secondary"
-                                            : "hover:bg-secondary/60"
-                                        }`}
-                                        onClick={() => !isEditing && onSelectSession(session.id)}
-                                        onContextMenu={(event) =>
-                                          !isEditing && handleSessionContextMenu(event, session.id)
-                                        }
-                                        type="button"
-                                      >
-                                        {isEditing ? (
-                                          <input
-                                            autoFocus
-                                            value={editingTitle}
-                                            onChange={(e) => setEditingTitle(e.target.value)}
-                                            onBlur={handleSaveEdit}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") {
-                                                e.preventDefault();
-                                                handleSaveEdit();
-                                              }
-                                              if (e.key === "Escape") {
-                                                e.preventDefault();
-                                                handleCancelEdit();
-                                              }
-                                            }}
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="w-full text-sm font-medium text-foreground bg-background border border-input rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-ring"
-                                          />
-                                        ) : (
+                                      {isEditing ? (
+                                        <input
+                                          autoFocus
+                                          value={editingTitle}
+                                          onChange={(e) => setEditingTitle(e.target.value)}
+                                          onBlur={handleSaveEdit}
+                                          onKeyDown={handleEditTitleKeyDown}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                                        />
+                                      ) : (
+                                        <button
+                                          className={`flex-1 min-w-0 cursor-pointer text-left rounded-lg px-3 py-2 transition-colors ${
+                                            isActive
+                                              ? "bg-secondary"
+                                              : "hover:bg-secondary/60"
+                                          }`}
+                                          onClick={() => onSelectSession(session.id)}
+                                          onContextMenu={(event) =>
+                                            handleSessionContextMenu(event, session.id)
+                                          }
+                                          type="button"
+                                        >
                                           <Tooltip delayDuration={500}>
                                             <TooltipTrigger asChild>
                                               <p className="text-sm font-medium text-foreground truncate">
@@ -934,13 +1014,11 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                               {normalizeTitle(session.title)}
                                             </TooltipContent>
                                           </Tooltip>
-                                        )}
-                                        {!isEditing && (
                                           <span className="text-[10px] text-muted-foreground mt-1 block">
                                             {session.updatedAt}
                                           </span>
-                                        )}
-                                      </button>
+                                        </button>
+                                      )}
                                       <button
                                         type="button"
                                         aria-label="Delete session"
@@ -1006,44 +1084,35 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                           )}
                         </button>
                       )}
-                      <button
-                        className={`flex-1 min-w-0 cursor-pointer text-left rounded-md px-2.5 py-1.5 transition-colors ${
-                          showCheckbox ? "" : (isActive
-                            ? "bg-secondary"
-                            : "hover:bg-secondary/60")
-                        }`}
-                        onClick={() => {
-                          if (showCheckbox) {
-                            toggleSessionSelection(session.id);
-                          } else if (!isEditing) {
-                            onSelectSession(session.id);
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onBlur={handleSaveEdit}
+                          onKeyDown={handleEditTitleKeyDown}
+                          onClick={(e) => e.stopPropagation()}
+                          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                      ) : (
+                        <button
+                          className={`flex-1 min-w-0 cursor-pointer text-left rounded-md px-2.5 py-1.5 transition-colors ${
+                            showCheckbox ? "" : (isActive
+                              ? "bg-secondary"
+                              : "hover:bg-secondary/60")
+                          }`}
+                          onClick={() => {
+                            if (showCheckbox) {
+                              toggleSessionSelection(session.id);
+                            } else {
+                              onSelectSession(session.id);
+                            }
+                          }}
+                          onContextMenu={(event) =>
+                            !showCheckbox && handleSessionContextMenu(event, session.id)
                           }
-                        }}
-                        onContextMenu={(event) =>
-                          !(isEditing || showCheckbox) && handleSessionContextMenu(event, session.id)
-                        }
-                        type="button"
-                      >
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            value={editingTitle}
-                            onChange={(e) => setEditingTitle(e.target.value)}
-                            onBlur={handleSaveEdit}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                handleSaveEdit();
-                              }
-                              if (e.key === "Escape") {
-                                e.preventDefault();
-                                handleCancelEdit();
-                              }
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full text-sm font-medium text-foreground bg-background border border-input rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-ring"
-                          />
-                        ) : (
+                          type="button"
+                        >
                           <div className="flex items-center gap-2">
                             <Tooltip delayDuration={500}>
                               <TooltipTrigger asChild>
@@ -1059,8 +1128,8 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                               {session.updatedAt}
                             </span>
                           </div>
-                        )}
-                      </button>
+                        </button>
+                      )}
                       {/* Mobile action buttons */}
                       {!showCheckbox && onArchiveSession && (
                         <button

@@ -7,6 +7,7 @@ export * from "./loader";
 export * from "./message";
 export * from "./model-selector";
 export * from "./prompt-input";
+export * from "./prompt-input-files";
 export * from "./reasoning";
 export * from "./shimmer";
 export * from "./subagent-steps";
