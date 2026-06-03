@@ -34,8 +34,8 @@ from kimi_cli.web.models import (
     SessionStatus,
     UpdateSessionRequest,
 )
+from kimi_cli.web.runner.codex_process import CodexCLIRunner
 from kimi_cli.web.runner.messages import new_session_status_message, send_history_complete
-from kimi_cli.web.runner.process import KimiCLIRunner
 from kimi_cli.web.store.sessions import (
     JointSession,
     invalidate_sessions_cache,
@@ -96,19 +96,19 @@ def sanitize_filename(filename: str) -> str:
     return safe.strip() or "unnamed"
 
 
-def get_runner(req: Request) -> KimiCLIRunner:
-    """Get the KimiCLIRunner from the FastAPI app state."""
+def get_runner(req: Request) -> CodexCLIRunner:
+    """Get the CodexCLIRunner from the FastAPI app state."""
     return req.app.state.runner
 
 
-def get_runner_ws(ws: WebSocket) -> KimiCLIRunner:
-    """Get the KimiCLIRunner from the FastAPI app state (for WebSocket routes)."""
+def get_runner_ws(ws: WebSocket) -> CodexCLIRunner:
+    """Get the CodexCLIRunner from the FastAPI app state (for WebSocket routes)."""
     return ws.app.state.runner
 
 
 def get_editable_session(
     session_id: UUID,
-    runner: KimiCLIRunner,
+    runner: CodexCLIRunner,
 ) -> JointSession:
     """Get a session and verify it's not busy."""
     session = load_session_by_id(session_id)
@@ -247,7 +247,7 @@ async def replay_history(ws: WebSocket, session_dir: Path) -> None:
 
 @router.get("/", summary="List all sessions")
 async def list_sessions(
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
     limit: int = 100,
     offset: int = 0,
     q: str | None = None,
@@ -284,7 +284,7 @@ async def list_sessions(
 @router.get("/{session_id}", summary="Get session")
 async def get_session(
     session_id: UUID,
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
 ) -> Session | None:
     """Get a session by ID."""
     session = load_session_by_id(session_id)
@@ -379,7 +379,7 @@ class UploadSessionFileResponse(BaseModel):
 async def upload_session_file(
     session_id: UUID,
     file: UploadFile,
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
 ) -> UploadSessionFileResponse:
     """Upload a file to a session."""
     session = get_editable_session(session_id, runner)
@@ -562,7 +562,7 @@ def _update_last_session_id(session: JointSession) -> None:
 
 
 @router.delete("/{session_id}", summary="Delete a session")
-async def delete_session(session_id: UUID, runner: KimiCLIRunner = Depends(get_runner)) -> None:
+async def delete_session(session_id: UUID, runner: CodexCLIRunner = Depends(get_runner)) -> None:
     """Delete a session."""
     session = get_editable_session(session_id, runner)
     session_process = runner.get_session(session_id)
@@ -586,7 +586,7 @@ async def delete_session(session_id: UUID, runner: KimiCLIRunner = Depends(get_r
 async def update_session(
     session_id: UUID,
     request: UpdateSessionRequest,
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
 ) -> Session:
     """Update a session (e.g., rename title or archive/unarchive)."""
     from kimi_cli.session_state import load_session_state, save_session_state
@@ -684,7 +684,7 @@ def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
 async def fork_session_endpoint(
     session_id: UUID,
     request: ForkSessionRequest,
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
 ) -> Session:
     """Fork a session, creating a new session with history up to the specified turn.
 
@@ -749,7 +749,7 @@ async def fork_session_endpoint(
 async def generate_session_title(
     session_id: UUID,
     request: GenerateTitleRequest | None = None,
-    runner: KimiCLIRunner = Depends(get_runner),
+    runner: CodexCLIRunner = Depends(get_runner),
 ) -> GenerateTitleResponse:
     """Generate a concise session title using AI based on the first conversation turn.
 
@@ -873,7 +873,7 @@ Title:"""
 async def session_stream(
     session_id: UUID,
     websocket: WebSocket,
-    runner: KimiCLIRunner = Depends(get_runner_ws),
+    runner: CodexCLIRunner = Depends(get_runner_ws),
 ) -> None:
     """WebSocket stream for a session.
 

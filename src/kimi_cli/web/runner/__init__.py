@@ -1,6 +1,5 @@
-"""Web session runners."""
+"""Web session runner."""
 
 from kimi_cli.web.runner.codex_process import CodexCLIRunner
-from kimi_cli.web.runner.process import KimiCLIRunner
 
-__all__ = ["CodexCLIRunner", "KimiCLIRunner"]
+__all__ = ["CodexCLIRunner"]

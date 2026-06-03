@@ -41,7 +41,6 @@ from kimi_cli.web.auth import (
     normalize_allowed_origins,
 )
 from kimi_cli.web.runner.codex_process import CodexCLIRunner
-from kimi_cli.web.runner.process import KimiCLIRunner
 
 # Configure logging based on LOG_LEVEL environment variable
 _log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
@@ -66,7 +65,6 @@ ENV_ALLOWED_ORIGINS = "KIMI_WEB_ALLOWED_ORIGINS"
 ENV_ENFORCE_ORIGIN = "KIMI_WEB_ENFORCE_ORIGIN"
 ENV_RESTRICT_SENSITIVE_APIS = "KIMI_WEB_RESTRICT_SENSITIVE_APIS"
 ENV_MAX_PUBLIC_PATH_DEPTH = "KIMI_WEB_MAX_PUBLIC_PATH_DEPTH"
-ENV_AGENT_BACKEND = "EVOINFER_AGENT_BACKEND"
 
 # Cache durations
 _IMMUTABLE_MAX_AGE = 365 * 24 * 3600  # 1 year for content-hashed assets
@@ -157,8 +155,7 @@ def create_app(
         app.state.max_public_path_depth = max_public_path_depth
         app.state.lan_only = lan_only
 
-        backend = os.environ.get(ENV_AGENT_BACKEND, "codex").strip().lower()
-        runner = KimiCLIRunner() if backend == "kimi" else CodexCLIRunner()
+        runner = CodexCLIRunner()
         app.state.runner = runner
         runner.start()
 
