@@ -18,7 +18,8 @@ from uuid import UUID, uuid4
 from kosong.message import ContentPart, TextPart
 from starlette.websockets import WebSocket, WebSocketState
 
-from kimi_cli import logger
+from kimi_cli import logger, prompts
+from kimi_cli.utils.slashcmd import SlashCommandCall, parse_slash_command_call
 from kimi_cli.utils.subprocess_env import get_clean_env
 from kimi_cli.web.models import (
     SessionNoticePayload,
@@ -47,7 +48,15 @@ from kimi_cli.wire.jsonrpc import (
     JSONRPCSteerMessage,
     JSONRPCSuccessResponse,
 )
-from kimi_cli.wire.types import StatusUpdate, TurnBegin, WireMessage
+from kimi_cli.wire.types import (
+    CompactionBegin,
+    CompactionEnd,
+    StatusUpdate,
+    StepBegin,
+    TurnBegin,
+    TurnEnd,
+    WireMessage,
+)
 
 CODEX_THREAD_FILE = "codex_thread.json"
 ENV_CODEX_BIN = "EVOINFER_CODEX_BIN"
@@ -55,6 +64,39 @@ ENV_CODEX_MODEL = "EVOINFER_CODEX_MODEL"
 ENV_CODEX_MODEL_PROVIDER = "EVOINFER_CODEX_MODEL_PROVIDER"
 ENV_CODEX_SANDBOX = "EVOINFER_CODEX_SANDBOX"
 ENV_CODEX_APPROVAL_POLICY = "EVOINFER_CODEX_APPROVAL_POLICY"
+
+CODEX_SLASH_COMMANDS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "init",
+        "description": "Analyze the codebase and generate an AGENTS.md file",
+        "aliases": [],
+    },
+    {
+        "name": "compact",
+        "description": "Compact the Codex Web conversation context",
+        "aliases": [],
+    },
+    {
+        "name": "clear",
+        "description": "Clear the visible chat and start a fresh Codex thread",
+        "aliases": ["reset"],
+    },
+    {
+        "name": "plan",
+        "description": "Toggle plan mode. Usage: /plan [on|off]",
+        "aliases": [],
+    },
+    {
+        "name": "yolo",
+        "description": "Show the current Codex approval policy",
+        "aliases": [],
+    },
+)
+CODEX_SLASH_COMMAND_NAMES = {
+    name
+    for command in CODEX_SLASH_COMMANDS
+    for name in (command["name"], *command["aliases"])
+}
 
 
 class CodexSessionProcess:
@@ -95,6 +137,7 @@ class CodexSessionProcess:
         self._wire_file: WireFile | None = None
         self._plan_mode = False
         self._dream_mode = False
+        self._approval_policy = os.environ.get(ENV_CODEX_APPROVAL_POLICY, "never")
 
     @property
     def is_alive(self) -> bool:
@@ -376,7 +419,7 @@ class CodexSessionProcess:
     def _base_thread_params(self, cwd: str) -> dict[str, Any]:
         params: dict[str, Any] = {
             "cwd": cwd,
-            "approvalPolicy": os.environ.get(ENV_CODEX_APPROVAL_POLICY, "never"),
+            "approvalPolicy": self._approval_policy,
             "sandbox": os.environ.get(ENV_CODEX_SANDBOX, "workspace-write"),
             "personality": "pragmatic",
         }
@@ -797,6 +840,158 @@ class CodexSessionProcess:
             self._websocket_count = len(self._websockets)
             self._replay_buffers.pop(ws, None)
 
+    @staticmethod
+    def _slash_commands_payload() -> list[dict[str, Any]]:
+        return [
+            {
+                "name": str(command["name"]),
+                "description": str(command["description"]),
+                "aliases": list(command["aliases"]),
+            }
+            for command in CODEX_SLASH_COMMANDS
+        ]
+
+    @staticmethod
+    def _supported_slash_command(user_input: str | list[ContentPart]) -> SlashCommandCall | None:
+        if not isinstance(user_input, str):
+            return None
+        call = parse_slash_command_call(user_input)
+        if call is None or call.name not in CODEX_SLASH_COMMAND_NAMES:
+            return None
+        if call.name == "reset":
+            return SlashCommandCall(name="clear", args=call.args, raw_input=call.raw_input)
+        return call
+
+    async def _emit_local_turn(
+        self,
+        *,
+        message_id: str,
+        user_input: str,
+        messages: list[WireMessage],
+    ) -> None:
+        await self._emit_status("busy", reason="slash_command")
+        await self._emit_wire_message(TurnBegin(user_input=user_input))
+        for wire_message in messages:
+            await self._emit_wire_message(wire_message)
+        await self._emit_wire_message(TurnEnd())
+        await self._broadcast(dump_finished_response(message_id))
+        await self._emit_status("idle", reason="slash_command")
+
+    async def _truncate_context_file(self) -> None:
+        try:
+            if self._context_file is None:
+                self._load_session_paths()
+        except ValueError:
+            return
+        context_file = self._context_file
+        if context_file is None:
+            return
+        context_file.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(context_file.write_text, "", encoding="utf-8")
+
+    async def _start_fresh_thread(self) -> None:
+        if not self.is_alive:
+            return
+        joint_session = load_session_by_id(self.session_id)
+        if joint_session is None:
+            return
+        params = self._base_thread_params(str(joint_session.kimi_cli_session.work_dir))
+        response = await self._send_codex_request("thread/start", params)
+        if "error" in response:
+            raise RuntimeError(response["error"].get("message", "Codex thread/start failed"))
+        self._save_codex_thread_metadata(response["result"])
+
+    async def _handle_local_slash_command(
+        self,
+        message: JSONRPCPromptMessage,
+        command: SlashCommandCall,
+    ) -> bool:
+        match command.name:
+            case "init":
+                instruction = str(prompts.INIT)
+                if command.args.strip():
+                    instruction = (
+                        f"{instruction}\n\nAdditional user instruction: {command.args.strip()}"
+                    )
+                await self._start_codex_turn(
+                    message_id=message.id,
+                    wire_input=command.raw_input,
+                    codex_input=[
+                        {
+                            "type": "text",
+                            "text": instruction,
+                            "text_elements": [],
+                        }
+                    ],
+                    context_text=command.raw_input,
+                )
+                return True
+            case "compact":
+                await self._start_fresh_thread()
+                await self._emit_local_turn(
+                    message_id=message.id,
+                    user_input=command.raw_input,
+                    messages=[
+                        StepBegin(n=1),
+                        CompactionBegin(),
+                        CompactionEnd(),
+                        TextPart(
+                            text=(
+                                "The Codex thread has been compacted by starting a fresh "
+                                "thread. Visible chat history is preserved in the UI."
+                            )
+                        ),
+                        StatusUpdate(context_usage=0.0, context_tokens=0),
+                    ],
+                )
+                return True
+            case "clear":
+                await self._truncate_context_file()
+                await self._start_fresh_thread()
+                await self._emit_local_turn(
+                    message_id=message.id,
+                    user_input=command.raw_input,
+                    messages=[
+                        TextPart(text="The context has been cleared."),
+                        StatusUpdate(context_usage=0.0, context_tokens=0),
+                    ],
+                )
+                return True
+            case "plan":
+                subcmd = command.args.strip().lower()
+                if subcmd in {"on", "true", "1", "yes"}:
+                    self._plan_mode = True
+                elif subcmd in {"off", "false", "0", "no"}:
+                    self._plan_mode = False
+                elif subcmd in {"", "toggle"}:
+                    self._plan_mode = not self._plan_mode
+                text = f"Plan mode {'ON' if self._plan_mode else 'OFF'}."
+                await self._emit_local_turn(
+                    message_id=message.id,
+                    user_input=command.raw_input,
+                    messages=[
+                        TextPart(text=text),
+                        StatusUpdate(plan_mode=self._plan_mode),
+                    ],
+                )
+                return True
+            case "yolo":
+                await self._emit_local_turn(
+                    message_id=message.id,
+                    user_input=command.raw_input,
+                    messages=[
+                        TextPart(
+                            text=(
+                                "Codex approval policy is "
+                                f"`{self._approval_policy}`. Full approval-dialog "
+                                "mapping is not implemented for Codex Web yet."
+                            )
+                        )
+                    ],
+                )
+                return True
+        return False
+
     async def send_message(self, message: str) -> None:
         await self.start()
         try:
@@ -810,20 +1005,7 @@ class CodexSessionProcess:
                 await self._broadcast(
                     dump_success_response(
                         in_message.id,
-                        {
-                            "slash_commands": [
-                                {
-                                    "name": "compact",
-                                    "description": "Compact context",
-                                    "aliases": [],
-                                },
-                                {
-                                    "name": "clear",
-                                    "description": "Clear the visible chat",
-                                    "aliases": [],
-                                },
-                            ]
-                        },
+                        {"slash_commands": self._slash_commands_payload()},
                     )
                 )
             case JSONRPCSetPlanModeMessage():
@@ -859,11 +1041,32 @@ class CodexSessionProcess:
             )
             return
 
+        slash_command = self._supported_slash_command(message.params.user_input)
+        if slash_command is not None and await self._handle_local_slash_command(
+            message, slash_command
+        ):
+            return
+
         wire_input, codex_input, context_text = await self._build_user_inputs(
             message.params.user_input
         )
-        self._in_flight_prompt_ids.add(message.id)
-        self._active_prompt_id = message.id
+        await self._start_codex_turn(
+            message_id=message.id,
+            wire_input=wire_input,
+            codex_input=codex_input,
+            context_text=context_text,
+        )
+
+    async def _start_codex_turn(
+        self,
+        *,
+        message_id: str,
+        wire_input: str | list[ContentPart],
+        codex_input: list[dict[str, Any]],
+        context_text: str,
+    ) -> None:
+        self._in_flight_prompt_ids.add(message_id)
+        self._active_prompt_id = message_id
         self._active_assistant_parts.clear()
         await self._emit_status("busy", reason="prompt")
         await self._emit_wire_message(TurnBegin(user_input=wire_input))
@@ -874,7 +1077,7 @@ class CodexSessionProcess:
         params: dict[str, Any] = {
             "threadId": self._thread_id,
             "input": codex_input,
-            "approvalPolicy": os.environ.get(ENV_CODEX_APPROVAL_POLICY, "never"),
+            "approvalPolicy": self._approval_policy,
         }
         response = await self._send_codex_request("turn/start", params)
         if "error" in response:

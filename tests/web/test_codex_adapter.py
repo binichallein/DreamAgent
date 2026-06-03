@@ -8,7 +8,15 @@ import pytest
 
 from kimi_cli.web.runner.codex_adapter import CodexEventTranslator
 from kimi_cli.web.runner.codex_process import CodexSessionProcess
-from kimi_cli.wire.types import ContentPart, StepBegin, ToolCall, ToolResult, TurnEnd
+from kimi_cli.wire.types import (
+    ContentPart,
+    StatusUpdate,
+    StepBegin,
+    ToolCall,
+    ToolResult,
+    TurnBegin,
+    TurnEnd,
+)
 
 
 def test_codex_agent_delta_becomes_text_content_part() -> None:
@@ -141,7 +149,59 @@ async def test_codex_initialize_returns_frontend_safe_slash_commands() -> None:
     response = json.loads(broadcasts[0])
     slash_commands = response["result"]["slash_commands"]
 
-    assert slash_commands == [
-        {"name": "compact", "description": "Compact context", "aliases": []},
-        {"name": "clear", "description": "Clear the visible chat", "aliases": []},
+    assert [command["name"] for command in slash_commands] == [
+        "init",
+        "compact",
+        "clear",
+        "plan",
+        "yolo",
     ]
+    assert all(isinstance(command["aliases"], list) for command in slash_commands)
+
+
+@pytest.mark.asyncio
+async def test_codex_plan_slash_command_is_handled_locally() -> None:
+    process = CodexSessionProcess(uuid4())
+    broadcasts: list[str] = []
+    wire_messages: list[object] = []
+
+    async def start_noop(self: CodexSessionProcess) -> None:
+        return None
+
+    async def capture_broadcast(self: CodexSessionProcess, message: str) -> None:
+        broadcasts.append(message)
+
+    async def capture_wire_message(self: CodexSessionProcess, message: object) -> None:
+        wire_messages.append(message)
+
+    async def fail_codex_request(
+        self: CodexSessionProcess,
+        method: str,
+        params: dict[str, object] | None,
+    ) -> dict[str, object]:
+        raise AssertionError(f"slash command unexpectedly called Codex {method}")
+
+    process.start = MethodType(start_noop, process)
+    process._broadcast = MethodType(capture_broadcast, process)
+    process._emit_wire_message = MethodType(capture_wire_message, process)
+    process._send_codex_request = MethodType(fail_codex_request, process)
+
+    await process.send_message(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "prompt",
+                "id": "prompt-1",
+                "params": {"user_input": "/plan on"},
+            }
+        )
+    )
+
+    assert isinstance(wire_messages[0], TurnBegin)
+    assert wire_messages[0].user_input == "/plan on"
+    assert any(isinstance(message, StatusUpdate) and message.plan_mode for message in wire_messages)
+    assert isinstance(wire_messages[-1], TurnEnd)
+
+    response = next(item for item in map(json.loads, broadcasts) if item.get("id") == "prompt-1")
+    assert response["id"] == "prompt-1"
+    assert response["result"]["status"] == "finished"
