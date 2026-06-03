@@ -812,8 +812,16 @@ class CodexSessionProcess:
                         in_message.id,
                         {
                             "slash_commands": [
-                                {"name": "/compact", "description": "Compact context"},
-                                {"name": "/clear", "description": "Clear the visible chat"},
+                                {
+                                    "name": "compact",
+                                    "description": "Compact context",
+                                    "aliases": [],
+                                },
+                                {
+                                    "name": "clear",
+                                    "description": "Clear the visible chat",
+                                    "aliases": [],
+                                },
                             ]
                         },
                     )
