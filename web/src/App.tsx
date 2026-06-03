@@ -10,6 +10,7 @@ import { DreamPage } from "./features/dream/dream-page";
 import { EvoInferPage } from "./features/evoinfer/evoinfer-page";
 import { SessionsSidebar } from "./features/sessions/sessions";
 import { CreateSessionDialog } from "./features/sessions/create-session-dialog";
+import { SystemStatusBadge } from "./features/system/system-status-badge";
 import { Toaster } from "./components/ui/sonner";
 import { formatRelativeTime } from "./hooks/utils";
 import { useSessions } from "./hooks/useSessions";
@@ -419,6 +420,7 @@ function App() {
   return (
     <PromptInputProvider>
       <div className="box-border flex h-[100dvh] flex-col bg-background text-foreground max-lg:h-[100svh] max-lg:overflow-hidden">
+        <SystemStatusBadge />
         <div className="mx-auto flex h-full min-h-0 w-full flex-1 flex-col max-w-none">
           {isDesktop ? (
             <ResizablePanelGroup
