@@ -7,10 +7,11 @@ import {
 } from "@/components/ui/tooltip";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import type { Session } from "@/lib/api/models";
-import { shortenTitle } from "@/lib/utils";
+import { cn, shortenTitle } from "@/lib/utils";
 import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  InfoIcon,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
@@ -148,92 +149,102 @@ export function ChatWorkspaceHeader({
           )}
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2">
-        {selectedSessionId && (
-          <>
-            {currentSession?.workDir ? (
-              <div className="hidden lg:block">
-                <OpenInMenu workDir={currentSession.workDir} />
-              </div>
-            ) : null}
+      <div className="flex items-center justify-end gap-2 pr-10 xl:pr-11">
+        {currentSession?.workDir ? (
+          <div className="hidden lg:block">
+            <OpenInMenu workDir={currentSession.workDir} />
+          </div>
+        ) : null}
 
-            <SessionInfoPopover
-              sessionId={selectedSessionId}
-              session={currentSession}
-            />
-
-            {onToggleFilesPanel ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={
-                      isFilesPanelOpen
-                        ? "Hide workspace files"
-                        : "Show workspace files"
-                    }
-                    className="relative inline-flex items-center cursor-pointer justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-                    onClick={onToggleFilesPanel}
-                  >
-                    {isFilesPanelOpen ? (
-                      <PanelRightClose className="size-4" />
-                    ) : (
-                      <PanelRightOpen className="size-4" />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {isFilesPanelOpen
-                    ? "Hide workspace files"
-                    : "Show workspace files"}
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Search messages"
-                  className="inline-flex items-center cursor-pointer justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-                  onClick={onOpenSearch}
-                >
-                  <SearchIcon className="size-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent className="flex items-center gap-2" side="bottom">
-                <span>Search messages</span>
-                <KbdGroup>
-                  <Kbd>{searchShortcutModifier}</Kbd>
-                  <span className="text-muted-foreground">+</span>
-                  <Kbd>F</Kbd>
-                </KbdGroup>
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={
-                    blocksExpanded ? "Fold all blocks" : "Unfold all blocks"
-                  }
-                  className="inline-flex items-center cursor-pointer justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-                  onClick={onToggleBlocks}
-                >
-                  {blocksExpanded ? (
-                    <ChevronsDownUpIcon className="size-4" />
-                  ) : (
-                    <ChevronsUpDownIcon className="size-4" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {blocksExpanded ? "Fold all blocks" : "Unfold all blocks"}
-              </TooltipContent>
-            </Tooltip>
-          </>
+        {selectedSessionId ? (
+          <SessionInfoPopover
+            sessionId={selectedSessionId}
+            session={currentSession}
+          />
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Session info"
+                disabled
+                className="inline-flex cursor-not-allowed items-center justify-center rounded-md p-2 text-muted-foreground/40"
+              >
+                <InfoIcon className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Session info</TooltipContent>
+          </Tooltip>
         )}
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={
+                isFilesPanelOpen ? "Hide workspace files" : "Show workspace files"
+              }
+              disabled={!onToggleFilesPanel}
+              className={cn(
+                "relative inline-flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors",
+                onToggleFilesPanel
+                  ? "cursor-pointer hover:bg-secondary/60 hover:text-foreground"
+                  : "cursor-not-allowed text-muted-foreground/40",
+              )}
+              onClick={onToggleFilesPanel}
+            >
+              {isFilesPanelOpen ? (
+                <PanelRightClose className="size-4" />
+              ) : (
+                <PanelRightOpen className="size-4" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isFilesPanelOpen ? "Hide workspace files" : "Show workspace files"}
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="Search messages"
+              className="inline-flex cursor-pointer items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              onClick={onOpenSearch}
+            >
+              <SearchIcon className="size-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent className="flex items-center gap-2" side="bottom">
+            <span>Search messages</span>
+            <KbdGroup>
+              <Kbd>{searchShortcutModifier}</Kbd>
+              <span className="text-muted-foreground">+</span>
+              <Kbd>F</Kbd>
+            </KbdGroup>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={blocksExpanded ? "Fold all blocks" : "Unfold all blocks"}
+              className="inline-flex cursor-pointer items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              onClick={onToggleBlocks}
+            >
+              {blocksExpanded ? (
+                <ChevronsDownUpIcon className="size-4" />
+              ) : (
+                <ChevronsUpDownIcon className="size-4" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {blocksExpanded ? "Fold all blocks" : "Unfold all blocks"}
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

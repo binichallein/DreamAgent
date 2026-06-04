@@ -228,7 +228,7 @@ export function SystemStatusBadge() {
   const hostname = status?.hostname ?? (hasError ? "System offline" : "System");
 
   return (
-    <div className="pointer-events-none fixed top-1.5 right-28 z-30 hidden xl:flex">
+    <div className="pointer-events-none fixed top-1.5 right-3 z-30 hidden xl:flex">
       <HoverCard
         open={isCardOpen}
         openDelay={200}
