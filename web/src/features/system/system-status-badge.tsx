@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Cpu, HardDrive, Server } from "lucide-react";
+import {
+  Activity,
+  Cpu,
+  HardDrive,
+  Monitor,
+  Thermometer,
+  type LucideIcon,
+} from "lucide-react";
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { Progress } from "@/components/ui/progress";
 import { getApiBaseUrl } from "@/hooks/utils";
 import { getAuthHeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -79,6 +87,36 @@ function formatMib(value: number | null): string {
   return `${value} MiB`;
 }
 
+function clampPercent(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, value));
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value.toFixed(1)}%`;
+}
+
+function ratioPercent(
+  used: number | null | undefined,
+  total: number | null | undefined,
+): number | null {
+  if (
+    typeof used !== "number" ||
+    typeof total !== "number" ||
+    !Number.isFinite(used) ||
+    !Number.isFinite(total) ||
+    total <= 0
+  ) {
+    return null;
+  }
+  return (used / total) * 100;
+}
+
 function formatUptime(seconds: number | null): string {
   if (seconds === null || seconds < 0) {
     return "-";
@@ -95,23 +133,48 @@ function formatUptime(seconds: number | null): string {
   return `${minutes}m`;
 }
 
-function formatGpuSummary(gpus: GPUStatus[]): string {
-  const gpu = gpus[0];
-  if (!gpu) {
-    return "none";
+type MetricBarProps = {
+  icon: LucideIcon;
+  label: string;
+  valueText: string;
+  percent: number | null | undefined;
+};
+
+function MetricBar({
+  icon: Icon,
+  label,
+  valueText,
+  percent,
+}: MetricBarProps) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <Icon className="size-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </div>
+        <span className="shrink-0 font-medium text-foreground">
+          {valueText}
+        </span>
+      </div>
+      <Progress value={clampPercent(percent)} className="h-1.5 bg-muted" />
+    </div>
+  );
+}
+
+function getCpuLoadPercent(status: SystemStatus): number | null {
+  const load = status.cpu.load_average[0];
+  const cores = status.cpu.logical_cores;
+  if (typeof load !== "number" || cores <= 0) {
+    return null;
   }
-  const utilization =
-    gpu.utilization_percent === null ? "-" : `${gpu.utilization_percent}%`;
-  const memory =
-    gpu.memory_used_mib === null || gpu.memory_total_mib === null
-      ? "-"
-      : `${formatMib(gpu.memory_used_mib)}/${formatMib(gpu.memory_total_mib)}`;
-  return `${utilization} ${memory}`;
+  return (load / cores) * 100;
 }
 
 export function SystemStatusBadge() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [hasError, setHasError] = useState(false);
+  const [isCardOpen, setIsCardOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -137,9 +200,9 @@ export function SystemStatusBadge() {
       }
     };
 
-    void loadStatus();
+    loadStatus().catch(() => undefined);
     const intervalId = window.setInterval(() => {
-      void loadStatus();
+      loadStatus().catch(() => undefined);
     }, POLL_INTERVAL_MS);
 
     return () => {
@@ -149,122 +212,145 @@ export function SystemStatusBadge() {
     };
   }, []);
 
-  const cpuSummary = useMemo(() => {
+  const cpuLoadText = useMemo(() => {
     if (!status) {
-      return "CPU -";
+      return "-";
     }
     const load = status.cpu.load_average[0];
     const loadText = typeof load === "number" ? load.toFixed(2) : "-";
-    return `CPU ${loadText}/${status.cpu.logical_cores || "-"}`;
+    return `${loadText} / ${status.cpu.logical_cores || "-"}`;
   }, [status]);
 
-  const memorySummary = useMemo(() => {
-    if (!status || status.memory.used_percent === null) {
-      return "MEM -";
-    }
-    return `MEM ${status.memory.used_percent.toFixed(1)}%`;
-  }, [status]);
-
-  const gpuSummary = useMemo(
-    () => (status ? formatGpuSummary(status.gpus) : "-"),
-    [status],
-  );
+  const usedMemoryBytes = status
+    ? Math.max(0, status.memory.total_bytes - status.memory.available_bytes)
+    : 0;
 
   const hostname = status?.hostname ?? (hasError ? "System offline" : "System");
 
   return (
-    <div className="pointer-events-none fixed top-1.5 right-28 z-30 hidden max-w-[calc(100vw-20rem)] xl:flex">
-      <HoverCard openDelay={200} closeDelay={120}>
+    <div className="pointer-events-none fixed top-1.5 right-28 z-30 hidden xl:flex">
+      <HoverCard
+        open={isCardOpen}
+        openDelay={200}
+        closeDelay={120}
+        onOpenChange={setIsCardOpen}
+      >
         <HoverCardTrigger asChild>
           <button
             type="button"
+            aria-label={`System status: ${hostname}`}
+            onClick={() => setIsCardOpen((open) => !open)}
             className={cn(
-              "pointer-events-auto inline-flex h-8 max-w-full items-center gap-2 overflow-hidden rounded-md border border-border bg-background/95 px-2.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-secondary/70 hover:text-foreground",
-              hasError && "border-red-200 text-red-700 dark:border-red-900/70 dark:text-red-300",
+              "pointer-events-auto relative inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-secondary/70 hover:text-foreground",
+              hasError &&
+                "border-red-200 text-red-700 dark:border-red-900/70 dark:text-red-300",
             )}
           >
-            <Server className="size-3.5 shrink-0" />
-            <span className="max-w-32 truncate font-medium text-foreground">
-              {hostname}
-            </span>
-            <span className="h-3 w-px shrink-0 bg-border" />
-            <Cpu className="size-3.5 shrink-0" />
-            <span className="shrink-0">{cpuSummary}</span>
-            <HardDrive className="size-3.5 shrink-0" />
-            <span className="shrink-0">{memorySummary}</span>
-            <Activity className="size-3.5 shrink-0" />
-            <span className="max-w-40 truncate">GPU {gpuSummary}</span>
+            <Monitor className="size-4" />
+            <span
+              className={cn(
+                "absolute top-1.5 right-1.5 size-1.5 rounded-full",
+                status && !hasError ? "bg-emerald-500" : "bg-muted-foreground",
+              )}
+            />
           </button>
         </HoverCardTrigger>
-        <HoverCardContent align="end" className="w-96 p-3">
+        <HoverCardContent align="end" sideOffset={8} className="w-[380px] p-3">
           <div className="space-y-3 text-xs">
-            <div>
-              <div className="font-semibold text-foreground">
-                {status?.hostname ?? "System status"}
-              </div>
-              <div className="mt-1 text-muted-foreground">
-                {status ? `${status.platform} · ${status.arch}` : "Loading"}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-md border bg-muted/30 p-2">
-                <div className="font-medium text-foreground">CPU</div>
-                <div className="mt-1 text-muted-foreground">
-                  {status?.cpu.model ?? "-"}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-foreground">
+                  {status?.hostname ?? "System status"}
                 </div>
-                <div className="mt-1">
-                  Load {status?.cpu.load_average.join(" / ") || "-"} ·{" "}
-                  {status?.cpu.logical_cores ?? "-"} cores
+                <div className="mt-1 line-clamp-2 text-muted-foreground">
+                  {status ? `${status.platform} · ${status.arch}` : "Loading"}
                 </div>
               </div>
-              <div className="rounded-md border bg-muted/30 p-2">
-                <div className="font-medium text-foreground">Memory</div>
-                <div className="mt-1">
-                  {status?.memory.used_percent === null ||
-                  status?.memory.used_percent === undefined
-                    ? "-"
-                    : `${status.memory.used_percent.toFixed(1)}% used`}
-                </div>
-                <div className="mt-1 text-muted-foreground">
-                  {status
-                    ? `${formatBytes(
-                        status.memory.total_bytes -
-                          status.memory.available_bytes,
-                      )} / ${formatBytes(status.memory.total_bytes)}`
-                    : "-"}
-                </div>
+              <div className="shrink-0 rounded-md border bg-muted/30 px-2 py-1 text-muted-foreground">
+                Uptime {formatUptime(status?.uptime_seconds ?? null)}
               </div>
             </div>
-            <div className="rounded-md border bg-muted/30 p-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-medium text-foreground">GPU</div>
-                <div className="text-muted-foreground">
-                  Uptime {formatUptime(status?.uptime_seconds ?? null)}
-                </div>
-              </div>
-              <div className="mt-2 space-y-1">
-                {status?.gpus.length ? (
-                  status.gpus.map((gpu, index) => (
-                    <div
-                      key={`${gpu.name}-${index}`}
-                      className="flex items-center justify-between gap-3"
-                    >
-                      <span className="min-w-0 truncate">{gpu.name}</span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {gpu.utilization_percent ?? "-"}% ·{" "}
-                        {formatMib(gpu.memory_used_mib)}/
-                        {formatMib(gpu.memory_total_mib)} ·{" "}
-                        {gpu.temperature_c ?? "-"}C
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-muted-foreground">
-                    No GPU detected by nvidia-smi
+
+            {status ? (
+              <>
+                <div className="rounded-md border bg-muted/30 p-2.5">
+                  <div className="mb-2 min-w-0 truncate font-medium text-foreground">
+                    {status.cpu.model ?? "CPU"}
                   </div>
-                )}
+                  <MetricBar
+                    icon={Cpu}
+                    label="CPU load"
+                    valueText={cpuLoadText}
+                    percent={getCpuLoadPercent(status)}
+                  />
+                </div>
+
+                <div className="rounded-md border bg-muted/30 p-2.5">
+                  <MetricBar
+                    icon={HardDrive}
+                    label="Memory"
+                    valueText={`${formatBytes(usedMemoryBytes)} / ${formatBytes(
+                      status.memory.total_bytes,
+                    )}`}
+                    percent={status.memory.used_percent}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  {status.gpus.length ? (
+                    status.gpus.map((gpu, index) => (
+                      <div
+                        key={`${gpu.name}-${index}`}
+                        className="space-y-2 rounded-md border bg-muted/30 p-2.5"
+                      >
+                        <div className="truncate font-medium text-foreground">
+                          {gpu.name}
+                        </div>
+                        <MetricBar
+                          icon={Activity}
+                          label="GPU utilization"
+                          valueText={formatPercent(gpu.utilization_percent)}
+                          percent={gpu.utilization_percent}
+                        />
+                        <MetricBar
+                          icon={HardDrive}
+                          label="GPU memory"
+                          valueText={`${formatMib(gpu.memory_used_mib)} / ${formatMib(
+                            gpu.memory_total_mib,
+                          )}`}
+                          percent={ratioPercent(
+                            gpu.memory_used_mib,
+                            gpu.memory_total_mib,
+                          )}
+                        />
+                        <MetricBar
+                          icon={Thermometer}
+                          label="GPU temperature"
+                          valueText={
+                            gpu.temperature_c === null
+                              ? "-"
+                              : `${gpu.temperature_c}C`
+                          }
+                          percent={
+                            gpu.temperature_c === null
+                              ? null
+                              : (gpu.temperature_c / 100) * 100
+                          }
+                        />
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-md border bg-muted/30 p-2.5 text-muted-foreground">
+                      No GPU detected by nvidia-smi
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md border bg-muted/30 p-2.5 text-muted-foreground">
+                {hasError ? "Failed to load system status" : "Loading"}
               </div>
-            </div>
+            )}
           </div>
         </HoverCardContent>
       </HoverCard>
