@@ -348,11 +348,15 @@ def test_evoinfer_schema_outputs_versioned_dream_memory_schema() -> None:
 
 def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     readme = Path("docs/evoinfer/README.md")
+    chinese_readme = Path("README.zh-CN.md")
 
     assert readme.is_file()
+    assert chinese_readme.is_file()
     text = readme.read_text(encoding="utf-8")
+    chinese_text = chinese_readme.read_text(encoding="utf-8")
     assert "uv tool install --force --editable ." in text
     assert "uv run" not in text
+    assert "uv run" not in chinese_text
     assert "dream_extract_and_write_memories" in text
     assert "evoinfer doctor --json" in text
     assert "evoinfer mcp-config --client codex" in text
@@ -362,6 +366,8 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     assert "Kimi CLI is not wired into hook mode" in text
     assert "claude mcp add-json" in text
     assert "--enable-embedding" in text
+    assert "EvoInfer Dream 是一个面向推理优化 agent 的开盒 MCP 记忆管理器" in chinese_text
+    assert "evoinfer --client codex --hook-every-steps 10" in chinese_text
 
 
 def test_evoinfer_lifecycle_smoke_runs_mcp_stdio_memory_flow(

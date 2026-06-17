@@ -1,5 +1,7 @@
 # EvoInfer Dream MCP
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 EvoInfer Dream is an open-box MCP memory manager for inference optimization
 agents. It gives a code agent tools to retrieve, write, verify, and maintain
 evidence-backed memories from optimization and environment-debug work.
