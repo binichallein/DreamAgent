@@ -28,6 +28,9 @@ def build_evoinfer_mcp_config(
     command: str = "python",
     enable_embedding: bool = False,
     embedding_model: str | None = None,
+    call_log_path: Path | None = None,
+    session_id: str | None = None,
+    mandatory: bool = False,
 ) -> dict[str, object]:
     """Build a stdio MCP config for the EvoInfer Dream memory manager."""
 
@@ -39,6 +42,9 @@ def build_evoinfer_mcp_config(
         share_dir=share_dir,
         enable_embedding=enable_embedding,
         embedding_model=embedding_model,
+        call_log_path=call_log_path,
+        session_id=session_id,
+        mandatory=mandatory,
     )
     if env:
         server["env"] = env
@@ -57,6 +63,9 @@ def build_evoinfer_mcp_server_config(
     include_type: bool = False,
     enable_embedding: bool = False,
     embedding_model: str | None = None,
+    call_log_path: Path | None = None,
+    session_id: str | None = None,
+    mandatory: bool = False,
 ) -> dict[str, object]:
     """Build one stdio MCP server config entry."""
 
@@ -70,6 +79,9 @@ def build_evoinfer_mcp_server_config(
         share_dir=share_dir,
         enable_embedding=enable_embedding,
         embedding_model=embedding_model,
+        call_log_path=call_log_path,
+        session_id=session_id,
+        mandatory=mandatory,
     )
     if env:
         server["env"] = env
@@ -160,6 +172,9 @@ def _render_codex_mcp_toml(
     command: str,
     enable_embedding: bool = False,
     embedding_model: str | None = None,
+    call_log_path: Path | None = None,
+    session_id: str | None = None,
+    mandatory: bool = False,
 ) -> str:
     lines = [
         "[mcp_servers.evoinfer-dream]",
@@ -170,6 +185,9 @@ def _render_codex_mcp_toml(
         share_dir=share_dir,
         enable_embedding=enable_embedding,
         embedding_model=embedding_model,
+        call_log_path=call_log_path,
+        session_id=session_id,
+        mandatory=mandatory,
     )
     if env:
         lines.extend(
@@ -192,10 +210,19 @@ def _build_evoinfer_mcp_env(
     share_dir: Path | None,
     enable_embedding: bool,
     embedding_model: str | None,
+    call_log_path: Path | None = None,
+    session_id: str | None = None,
+    mandatory: bool = False,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
     if share_dir is not None:
         env["EVOINFER_SHARE_DIR"] = str(share_dir)
+    if call_log_path is not None:
+        env["EVOINFER_MCP_CALL_LOG"] = str(call_log_path)
+    if session_id:
+        env["EVOINFER_DREAM_SESSION_ID"] = session_id
+    if mandatory:
+        env["EVOINFER_DREAM_MANDATORY"] = "1"
     if enable_embedding:
         from evoinfer_mcp.dream.embedding import (
             DEFAULT_EMBEDDING_MODEL,
@@ -277,6 +304,207 @@ def evoinfer_mcp_config(
             embedding_model=embedding_model,
         )
     )
+
+
+MANDATORY_DREAM_SESSION_PROTOCOL = """# MANDATORY EvoInfer Dream session protocol
+
+This is a dedicated EvoInfer Dream session. Dream is mandatory in this session,
+not an optional helper.
+
+Before doing task-local exploration:
+
+1. Call `dream_get_agent_protocol` for the current task type and workdir.
+2. Call `dream_search_memories` using the hardware, backend, dtype, workload,
+   model/operator, and optimization or debug goal.
+3. Treat retrieved successful memories as evidence-backed hypotheses. Treat
+   negative memories as transfer constraints.
+
+During the task:
+
+4. If stuck, changing route, or choosing between CUDA, Triton, PyTorch,
+   FlashInfer, FLA, another backend, or an environment fix, call
+   `dream_search_memories` again before continuing.
+5. Do real benchmark, correctness, profiler, source, and environment checks.
+   Do not claim speedup or correctness without artifacts.
+
+Before the final report:
+
+6. If benchmark, correctness, profiler, verifier, source, or environment
+   artifacts exist in the workdir, call `dream_extract_and_write_memories`.
+7. Record feedback with `dream_record_feedback` when retrieved memories were
+   useful or not useful.
+8. Mention retrieved and written Dream memory IDs and the evidence artifacts in
+   the final report.
+"""
+
+
+@cli.command("force-session")
+def evoinfer_force_session(
+    session_dir: Annotated[
+        Path,
+        typer.Option(
+            "--session-dir",
+            help="Directory that stores this mandatory Dream session bundle.",
+        ),
+    ],
+    share_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--share-dir",
+            help="Durable Dream memory store for this session. Defaults to SESSION_DIR/share.",
+        ),
+    ] = None,
+    workdir: Annotated[
+        Path | None,
+        typer.Option(
+            "--workdir",
+            help="Agent workdir for this session. Defaults to SESSION_DIR/work.",
+        ),
+    ] = None,
+    command: Annotated[
+        str,
+        typer.Option(
+            "--command",
+            help="Python executable used by the MCP client to start EvoInfer Dream.",
+        ),
+    ] = "python",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Create a per-session bundle that makes Dream mandatory for one agent run."""
+
+    payload = build_evoinfer_force_session_bundle(
+        session_dir=session_dir,
+        share_dir=share_dir,
+        workdir=workdir,
+        command=command,
+    )
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    typer.echo("EvoInfer mandatory Dream session")
+    typer.echo(f"Session dir: {payload['session_dir']}")
+    typer.echo(f"Workdir: {payload['workdir']}")
+    typer.echo(f"MCP config: {payload['mcp_config_path']}")
+    typer.echo(f"Call log: {payload['call_log_path']}")
+    typer.echo("Commands:")
+    commands = payload["commands"]
+    if isinstance(commands, dict):
+        for name, command_text in commands.items():
+            typer.echo(f"- {name}: {command_text}")
+
+
+def build_evoinfer_force_session_bundle(
+    *,
+    session_dir: Path,
+    share_dir: Path | None,
+    workdir: Path | None,
+    command: str,
+) -> dict[str, object]:
+    session_dir = session_dir.expanduser().resolve()
+    share_dir = (share_dir or session_dir / "share").expanduser().resolve()
+    workdir = (workdir or session_dir / "work").expanduser().resolve()
+    call_log_path = session_dir / "mcp_calls.jsonl"
+    mcp_config_path = session_dir / "mcp.json"
+    session_id = session_dir.name
+
+    session_dir.mkdir(parents=True, exist_ok=True)
+    share_dir.mkdir(parents=True, exist_ok=True)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    server = build_evoinfer_mcp_server_config(
+        share_dir=share_dir,
+        command=command,
+        include_type=True,
+        call_log_path=call_log_path,
+        session_id=session_id,
+        mandatory=True,
+    )
+    mcp_config = {"mcpServers": {"evoinfer-dream": server}}
+    mcp_config_path.write_text(
+        json.dumps(mcp_config, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    instruction_paths = [workdir / "AGENTS.md", workdir / "CLAUDE.md"]
+    for instruction_path in instruction_paths:
+        instruction_path.write_text(MANDATORY_DREAM_SESSION_PROTOCOL, encoding="utf-8")
+
+    commands = {
+        "claude": " ".join(
+            [
+                "claude",
+                "-p",
+                shlex.quote("<task prompt>"),
+                "--mcp-config",
+                shlex.quote(str(mcp_config_path)),
+                "--strict-mcp-config",
+                "--permission-mode",
+                "bypassPermissions",
+            ]
+        ),
+        "codex": " ".join(
+            [
+                "codex",
+                "exec",
+                "--cd",
+                shlex.quote(str(workdir)),
+                "--skip-git-repo-check",
+                "-s",
+                "danger-full-access",
+                "-c",
+                shlex.quote(
+                    f"mcp_servers.evoinfer-dream.command={_toml_string(command)}"
+                ),
+                "-c",
+                shlex.quote('mcp_servers.evoinfer-dream.args=["-m","evoinfer_mcp.dream.mcp_server"]'),
+                "-c",
+                shlex.quote(
+                    "mcp_servers.evoinfer-dream.env.EVOINFER_SHARE_DIR="
+                    f"{_toml_string(str(share_dir))}"
+                ),
+                "-c",
+                shlex.quote(
+                    "mcp_servers.evoinfer-dream.env.EVOINFER_MCP_CALL_LOG="
+                    f"{_toml_string(str(call_log_path))}"
+                ),
+                "-c",
+                shlex.quote(
+                    "mcp_servers.evoinfer-dream.env.EVOINFER_DREAM_SESSION_ID="
+                    f"{_toml_string(session_id)}"
+                ),
+                "-c",
+                'mcp_servers.evoinfer-dream.env.EVOINFER_DREAM_MANDATORY="1"',
+                shlex.quote("<task prompt>"),
+            ]
+        ),
+        "kimi": " ".join(
+            [
+                "kimi",
+                "--work-dir",
+                shlex.quote(str(workdir)),
+                "--mcp-config-file",
+                shlex.quote(str(mcp_config_path)),
+                "--prompt",
+                shlex.quote("<task prompt>"),
+            ]
+        ),
+    }
+
+    return {
+        "mode": "mandatory-session",
+        "session_id": session_id,
+        "session_dir": str(session_dir),
+        "share_dir": str(share_dir),
+        "workdir": str(workdir),
+        "mcp_config_path": str(mcp_config_path),
+        "call_log_path": str(call_log_path),
+        "instruction_paths": [str(path) for path in instruction_paths],
+        "commands": commands,
+    }
 
 
 @cli.command("doctor")

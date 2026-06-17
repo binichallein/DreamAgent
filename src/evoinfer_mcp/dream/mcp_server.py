@@ -56,9 +56,20 @@ def _log_tool_call(name: str, arguments: dict[str, Any] | None = None) -> None:
         "tool": name,
         "arguments": arguments or {},
         "timestamp": datetime.now(UTC).isoformat(),
+        **_dream_session_metadata(),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _dream_session_metadata() -> dict[str, Any]:
+    mandatory = os.getenv("EVOINFER_DREAM_MANDATORY") == "1"
+    session_id = os.getenv("EVOINFER_DREAM_SESSION_ID")
+    return {
+        "mode": "mandatory-session" if mandatory else "optional",
+        "mandatory": mandatory,
+        "session_id": session_id,
+    }
 
 
 @mcp.tool(
@@ -82,8 +93,15 @@ def dream_get_agent_protocol_tool(
     return _json_response(
         {
             "identity": "EvoInfer Dream is an MCP memory manager",
+            **_dream_session_metadata(),
             "task_type": task_type,
             "workdir": workdir,
+            "mandatory_rules": [
+                "Call Dream before task-local exploration.",
+                "Call Dream again at stuck points or route switches.",
+                "Call artifact extraction/write before the final report when evidence exists.",
+                "Mention retrieved and written memory IDs in the final report.",
+            ],
             "lifecycle": [
                 {
                     "phase": "task_start",

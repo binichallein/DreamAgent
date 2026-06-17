@@ -109,6 +109,41 @@ The durable memory store is written under:
 $EVOINFER_SHARE_DIR/dream/memories.json
 ```
 
+## Mandatory Session Mode
+
+For validation or high-stakes optimization tasks, prefer a dedicated mandatory
+Dream session instead of a global optional MCP registration. This creates an
+isolated session directory with:
+
+- `mcp.json`: per-session stdio MCP config.
+- `mcp_calls.jsonl`: per-session Dream tool call audit log.
+- `work/AGENTS.md` and `work/CLAUDE.md`: mandatory Dream protocol instructions.
+- `share/`: the Dream memory store used by this session.
+
+Create the bundle:
+
+```bash
+uv run evoinfer force-session \
+  --session-dir /tmp/evoinfer-dream-session \
+  --share-dir ~/.evoinfer/dream-share \
+  --workdir /tmp/evoinfer-dream-session/work \
+  --command "$(pwd)/.venv/bin/python"
+```
+
+The printed commands run Claude Code, Codex, or Kimi CLI inside that dedicated
+mandatory Dream session. The MCP server also receives:
+
+```bash
+EVOINFER_DREAM_MANDATORY=1
+EVOINFER_DREAM_SESSION_ID=<session-name>
+EVOINFER_MCP_CALL_LOG=<session-dir>/mcp_calls.jsonl
+```
+
+This does not give the MCP server magical control over an agent. MCP servers
+cannot initiate tool calls by themselves. The enforcement comes from session
+scoping: the agent starts with only this session's config and instructions, and
+the call log makes missed Dream protocol steps auditable.
+
 ## Soft Protocol For Agents
 
 MCP tools are available only when the agent decides to call them. For reliable

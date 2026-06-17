@@ -313,6 +313,23 @@ def test_dream_mcp_agent_protocol_guides_active_memory_lifecycle() -> None:
     assert "Do not optimize for token/context reduction as the primary outcome." in payload["metrics"]
 
 
+def test_dream_mcp_agent_protocol_reports_mandatory_session(monkeypatch) -> None:
+    monkeypatch.setenv("EVOINFER_DREAM_SESSION_ID", "session-abc")
+    monkeypatch.setenv("EVOINFER_DREAM_MANDATORY", "1")
+
+    payload = json.loads(
+        dream_get_agent_protocol_tool(
+            task_type="optimization",
+            workdir="/workspace/campaign",
+        )
+    )
+
+    assert payload["mode"] == "mandatory-session"
+    assert payload["session_id"] == "session-abc"
+    assert payload["mandatory"] is True
+    assert "Call Dream before task-local exploration." in payload["mandatory_rules"]
+
+
 def test_dream_mcp_write_list_get_export_import_roundtrip(tmp_path, monkeypatch) -> None:
     memory_dir = tmp_path / ".evoinfer"
     monkeypatch.setenv("EVOINFER_SHARE_DIR", str(memory_dir))

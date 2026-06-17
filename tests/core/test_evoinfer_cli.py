@@ -75,6 +75,67 @@ def test_evoinfer_mcp_config_can_enable_cpu_embedding_backend(
     assert env["EVOINFER_EMBEDDING_DEVICE"] == "cpu"
 
 
+def test_evoinfer_force_session_creates_isolated_mandatory_dream_bundle(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "dream-session"
+    share_dir = tmp_path / "share"
+    workdir = tmp_path / "work"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "force-session",
+            "--json",
+            "--session-dir",
+            str(session_dir),
+            "--share-dir",
+            str(share_dir),
+            "--workdir",
+            str(workdir),
+            "--command",
+            "/usr/bin/python3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode"] == "mandatory-session"
+    assert payload["session_dir"] == str(session_dir.resolve())
+    assert payload["share_dir"] == str(share_dir.resolve())
+    assert payload["workdir"] == str(workdir.resolve())
+    assert payload["mcp_config_path"] == str((session_dir / "mcp.json").resolve())
+    assert payload["call_log_path"] == str((session_dir / "mcp_calls.jsonl").resolve())
+    assert payload["instruction_paths"] == [
+        str((workdir / "AGENTS.md").resolve()),
+        str((workdir / "CLAUDE.md").resolve()),
+    ]
+    assert "claude" in payload["commands"]
+    assert "codex" in payload["commands"]
+    assert "kimi" in payload["commands"]
+
+    config = json.loads((session_dir / "mcp.json").read_text(encoding="utf-8"))
+    server = config["mcpServers"]["evoinfer-dream"]
+    assert server == {
+        "type": "stdio",
+        "command": "/usr/bin/python3",
+        "args": ["-m", "evoinfer_mcp.dream.mcp_server"],
+        "env": {
+            "EVOINFER_SHARE_DIR": str(share_dir.resolve()),
+            "EVOINFER_MCP_CALL_LOG": str((session_dir / "mcp_calls.jsonl").resolve()),
+            "EVOINFER_DREAM_SESSION_ID": session_dir.name,
+            "EVOINFER_DREAM_MANDATORY": "1",
+        },
+    }
+    protocol = (workdir / "AGENTS.md").read_text(encoding="utf-8")
+    assert "MANDATORY EvoInfer Dream session protocol" in protocol
+    assert "Before doing task-local exploration" in protocol
+    assert "dream_get_agent_protocol" in protocol
+    assert "dream_search_memories" in protocol
+    assert "dream_extract_and_write_memories" in protocol
+    assert (workdir / "CLAUDE.md").read_text(encoding="utf-8") == protocol
+
+
 def test_evoinfer_mcp_config_outputs_codex_toml_template(tmp_path: Path) -> None:
     share_dir = tmp_path / "share"
 
@@ -178,6 +239,8 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     assert "dream_extract_and_write_memories" in text
     assert "evoinfer doctor --json" in text
     assert "evoinfer mcp-config --client codex" in text
+    assert "evoinfer force-session" in text
+    assert "mandatory Dream session" in text
     assert "claude mcp add-json" in text
     assert "--enable-embedding" in text
 

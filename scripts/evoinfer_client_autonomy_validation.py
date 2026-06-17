@@ -2,9 +2,9 @@
 """Run client autonomy checks against EvoInfer Dream MCP.
 
 The user prompt intentionally does not mention EvoInfer, Dream, or MCP. The
-Dream protocol is supplied only through project-level instruction files. Passing
-this check means the client/agent followed that standing instruction and called
-Dream tools on its own.
+Dream protocol is supplied only through a dedicated mandatory Dream session
+bundle. Passing this check means the client/agent followed that session protocol
+and called Dream tools on its own.
 """
 
 from __future__ import annotations
@@ -18,28 +18,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from evoinfer_mcp.cli import build_evoinfer_force_session_bundle
+
 CLIENTS = ("claude", "codex", "kimi")
 PROMPT = (
     "Analyze TASK.md and the local benchmark/correctness/profiler artifacts. "
     "Create final_report.md with the recommended route, correctness status, "
     "and the evidence files you used."
 )
-PROJECT_PROTOCOL = """# EvoInfer Validation Protocol
-
-This project is an inference optimization or environment-debug task.
-
-At task start, call the connected EvoInfer Dream MCP protocol tool, then search
-Dream memories using the current hardware, backend, dtype, workload, operator,
-and optimization goal. Treat successful memories as evidence-backed hypotheses
-and negative memories as transfer constraints.
-
-Before final output, if benchmark, correctness, verifier, profiler, source, or
-environment artifacts are present, call the EvoInfer Dream extraction/write tool
-for the current work directory. Then write final_report.md.
-
-Do not skip real evidence checks. Do not claim a speedup without comparable
-before/after benchmark and correctness evidence.
-"""
 
 
 def main() -> None:
@@ -89,31 +75,21 @@ def prepare_case(root: Path, client: str, *, python: Path) -> dict[str, Path]:
 
     if case_root.exists():
         shutil.rmtree(case_root)
-    for path in (share_dir / "dream", workdir):
-        path.mkdir(parents=True, exist_ok=True)
+    bundle = build_evoinfer_force_session_bundle(
+        session_dir=case_root,
+        share_dir=share_dir,
+        workdir=workdir,
+        command=str(python),
+    )
+    mcp_config = Path(str(bundle["mcp_config_path"]))
+    call_log = Path(str(bundle["call_log_path"]))
     for stale in (call_log, stdout_log, stderr_log, final_log):
         if stale.exists():
             stale.unlink()
 
     seed_memory_store(share_dir)
-    write_project_files(workdir)
+    write_task_file(workdir)
     write_artifacts(workdir)
-    write_json(
-        mcp_config,
-        {
-            "mcpServers": {
-                "evoinfer-dream": {
-                    "type": "stdio",
-                    "command": str(python),
-                    "args": ["-m", "evoinfer_mcp.dream.mcp_server"],
-                    "env": {
-                        "EVOINFER_SHARE_DIR": str(share_dir),
-                        "EVOINFER_MCP_CALL_LOG": str(call_log),
-                    },
-                }
-            }
-        },
-    )
     return {
         "case_root": case_root,
         "share_dir": share_dir,
@@ -168,9 +144,7 @@ def seed_memory_store(share_dir: Path) -> None:
     )
 
 
-def write_project_files(workdir: Path) -> None:
-    (workdir / "AGENTS.md").write_text(PROJECT_PROTOCOL, encoding="utf-8")
-    (workdir / "CLAUDE.md").write_text(PROJECT_PROTOCOL, encoding="utf-8")
+def write_task_file(workdir: Path) -> None:
     (workdir / "TASK.md").write_text(
         """# Local Optimization Task
 
@@ -339,10 +313,10 @@ def client_command(client: str, case: dict[str, Path]) -> list[str]:
             PROMPT,
         ]
     if client == "codex":
-        python = json.loads(case["mcp_config"].read_text(encoding="utf-8"))["mcpServers"][
+        server = json.loads(case["mcp_config"].read_text(encoding="utf-8"))["mcpServers"][
             "evoinfer-dream"
-        ]["command"]
-        return [
+        ]
+        command = [
             "codex",
             "exec",
             "--json",
@@ -352,15 +326,21 @@ def client_command(client: str, case: dict[str, Path]) -> list[str]:
             "-s",
             "danger-full-access",
             "-c",
-            f"mcp_servers.evoinfer-dream.command={toml_string(python)}",
+            f"mcp_servers.evoinfer-dream.command={toml_string(server['command'])}",
             "-c",
             'mcp_servers.evoinfer-dream.args=["-m","evoinfer_mcp.dream.mcp_server"]',
-            "-c",
-            f"mcp_servers.evoinfer-dream.env.EVOINFER_SHARE_DIR={toml_string(str(case['share_dir']))}",
-            "-c",
-            f"mcp_servers.evoinfer-dream.env.EVOINFER_MCP_CALL_LOG={toml_string(str(case['call_log']))}",
-            PROMPT,
         ]
+        env = server.get("env", {})
+        if isinstance(env, dict):
+            for key, value in sorted(env.items()):
+                command.extend(
+                    [
+                        "-c",
+                        f"mcp_servers.evoinfer-dream.env.{key}={toml_string(str(value))}",
+                    ]
+                )
+        command.append(PROMPT)
+        return command
     raise ValueError(f"unsupported client: {client}")
 
 
