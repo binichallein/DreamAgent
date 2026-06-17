@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -12,6 +14,7 @@ import typer
 cli = typer.Typer(help="Manage EvoInfer Dream MCP tooling.")
 
 EvoInferMCPClient = Literal["codex", "claude", "generic"]
+EvoInferAgentClient = Literal["codex", "claude"]
 EvoInferMCPConfigFormat = Literal[
     "json",
     "codex-toml",
@@ -235,6 +238,126 @@ def _build_evoinfer_mcp_env(
             )
         )
     return env
+
+
+@cli.callback(invoke_without_command=True)
+def evoinfer_main(
+    ctx: typer.Context,
+    client: Annotated[
+        EvoInferAgentClient | None,
+        typer.Option(
+            "--client",
+            help="Agent client to launch when no subcommand is supplied.",
+        ),
+    ] = None,
+    hook_every_steps: Annotated[
+        int,
+        typer.Option(
+            "--hook-every-steps",
+            min=1,
+            help="Run an EvoInfer Dream checkpoint after this many tool checkpoints.",
+        ),
+    ] = 10,
+    session_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--session-dir",
+            help="Directory for the hooked EvoInfer session bundle.",
+        ),
+    ] = None,
+    share_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--share-dir",
+            help="Durable Dream memory store. Defaults to SESSION_DIR/share.",
+        ),
+    ] = None,
+    workdir: Annotated[
+        Path | None,
+        typer.Option(
+            "--workdir",
+            help="Agent workdir. Defaults to SESSION_DIR/work.",
+        ),
+    ] = None,
+    command: Annotated[
+        str,
+        typer.Option(
+            "--command",
+            help="Python executable used by hooks and the MCP server.",
+        ),
+    ] = sys.executable,
+    prompt: Annotated[
+        str | None,
+        typer.Option("--prompt", "-p", help="Optional initial prompt for the launched agent."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Create the session bundle but do not launch the agent."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON for the generated session."),
+    ] = False,
+) -> None:
+    """Launch a Claude/Codex session with EvoInfer Dream hooks."""
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    selected_client = client
+    selected_steps = hook_every_steps
+    if selected_client is None:
+        selected_client = typer.prompt(
+            "Client",
+            default="codex",
+            type=click_choice(["codex", "claude"]),
+        )
+        selected_steps = typer.prompt(
+            "Dream hook every tool checkpoints",
+            default=hook_every_steps,
+            type=int,
+        )
+
+    if session_dir is None:
+        session_dir = Path.cwd() / ".evoinfer" / selected_client
+
+    payload = build_evoinfer_hooked_session_bundle(
+        client=selected_client,
+        hook_every_steps=selected_steps,
+        session_dir=session_dir,
+        share_dir=share_dir,
+        workdir=workdir,
+        command=command,
+        prompt=prompt,
+    )
+
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"EvoInfer hooked session: {payload['client']}")
+        typer.echo(f"Session dir: {payload['session_dir']}")
+        typer.echo(f"Workdir: {payload['workdir']}")
+        typer.echo(f"Hook every tool checkpoints: {payload['hook_every_steps']}")
+        typer.echo(f"Hook config: {payload['hook_config_path']}")
+        typer.echo(f"Dream context: {payload['dream_context_path']}")
+        typer.echo("Launch command:")
+        typer.echo(" ".join(shlex.quote(str(part)) for part in payload["launch_command"]))
+
+    if dry_run:
+        return
+
+    completed = subprocess.run(
+        [str(part) for part in payload["launch_command"]],
+        cwd=str(payload["workdir"]),
+        check=False,
+    )
+    raise typer.Exit(code=completed.returncode)
+
+
+def click_choice(values: list[str]):
+    import click
+
+    return click.Choice(values, case_sensitive=False)
 
 
 @cli.command("mcp-config")
@@ -505,6 +628,271 @@ def build_evoinfer_force_session_bundle(
         "instruction_paths": [str(path) for path in instruction_paths],
         "commands": commands,
     }
+
+
+def build_evoinfer_hooked_session_bundle(
+    *,
+    client: EvoInferAgentClient,
+    hook_every_steps: int,
+    session_dir: Path,
+    share_dir: Path | None,
+    workdir: Path | None,
+    command: str,
+    prompt: str | None = None,
+) -> dict[str, object]:
+    if hook_every_steps < 1:
+        raise ValueError("hook_every_steps must be >= 1")
+
+    base = build_evoinfer_force_session_bundle(
+        session_dir=session_dir,
+        share_dir=share_dir,
+        workdir=workdir,
+        command=command,
+    )
+    session_dir_path = Path(str(base["session_dir"]))
+    share_dir_path = Path(str(base["share_dir"]))
+    workdir_path = Path(str(base["workdir"]))
+    hook_state_path = session_dir_path / "hook_state.json"
+    dream_context_path = session_dir_path / "dream_context.md"
+    hook_state_path.write_text('{"tool_checkpoint_count": 0}\n', encoding="utf-8")
+    dream_context_path.write_text(
+        "# EvoInfer Dream Context\n\nNo checkpoint has run yet.\n",
+        encoding="utf-8",
+    )
+
+    if client == "claude":
+        hook_config_path = _write_claude_hook_config(
+            workdir=workdir_path,
+            command=command,
+            session_dir=session_dir_path,
+            share_dir=share_dir_path,
+            hook_state_path=hook_state_path,
+            dream_context_path=dream_context_path,
+            hook_every_steps=hook_every_steps,
+        )
+        launch_command = _build_claude_launch_command(
+            mcp_config_path=Path(str(base["mcp_config_path"])),
+            hook_config_path=hook_config_path,
+            prompt=prompt,
+        )
+    else:
+        hook_config_path = _write_codex_hook_config(
+            workdir=workdir_path,
+            command=command,
+            session_dir=session_dir_path,
+            share_dir=share_dir_path,
+            hook_state_path=hook_state_path,
+            dream_context_path=dream_context_path,
+            hook_every_steps=hook_every_steps,
+        )
+        launch_command = _build_codex_launch_command(
+            workdir=workdir_path,
+            mcp_config_path=Path(str(base["mcp_config_path"])),
+            prompt=prompt,
+        )
+
+    payload = {
+        **base,
+        "mode": "hooked-session",
+        "client": client,
+        "hook_every_steps": hook_every_steps,
+        "hook_config_path": str(hook_config_path),
+        "hook_state_path": str(hook_state_path),
+        "dream_context_path": str(dream_context_path),
+        "launch_command": launch_command,
+        "commands": {client: " ".join(shlex.quote(part) for part in launch_command)},
+    }
+    return payload
+
+
+def _hook_command_args(
+    *,
+    client: EvoInferAgentClient,
+    session_dir: Path,
+    share_dir: Path,
+    hook_state_path: Path,
+    dream_context_path: Path,
+    hook_every_steps: int,
+) -> list[str]:
+    return [
+        "-m",
+        "evoinfer_mcp.hooks.dream_checkpoint",
+        "--client",
+        client,
+        "--session-dir",
+        str(session_dir),
+        "--share-dir",
+        str(share_dir),
+        "--state-file",
+        str(hook_state_path),
+        "--context-file",
+        str(dream_context_path),
+        "--every-steps",
+        str(hook_every_steps),
+    ]
+
+
+def _hook_shell_command(command: str, args: list[str]) -> str:
+    return " ".join([shlex.quote(command), *[shlex.quote(arg) for arg in args]])
+
+
+def _write_claude_hook_config(
+    *,
+    workdir: Path,
+    command: str,
+    session_dir: Path,
+    share_dir: Path,
+    hook_state_path: Path,
+    dream_context_path: Path,
+    hook_every_steps: int,
+) -> Path:
+    hook_dir = workdir / ".claude"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    args = _hook_command_args(
+        client="claude",
+        session_dir=session_dir,
+        share_dir=share_dir,
+        hook_state_path=hook_state_path,
+        dream_context_path=dream_context_path,
+        hook_every_steps=hook_every_steps,
+    )
+    hook = {
+        "type": "command",
+        "command": command,
+        "args": args,
+        "timeout": 60,
+    }
+    payload = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "startup|resume",
+                    "hooks": [hook],
+                }
+            ],
+            "PostToolBatch": [
+                {
+                    "hooks": [hook],
+                }
+            ],
+            "Stop": [
+                {
+                    "hooks": [hook],
+                }
+            ],
+        }
+    }
+    path = hook_dir / "settings.local.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path.resolve()
+
+
+def _write_codex_hook_config(
+    *,
+    workdir: Path,
+    command: str,
+    session_dir: Path,
+    share_dir: Path,
+    hook_state_path: Path,
+    dream_context_path: Path,
+    hook_every_steps: int,
+) -> Path:
+    hook_dir = workdir / ".codex"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    args = _hook_command_args(
+        client="codex",
+        session_dir=session_dir,
+        share_dir=share_dir,
+        hook_state_path=hook_state_path,
+        dream_context_path=dream_context_path,
+        hook_every_steps=hook_every_steps,
+    )
+    hook = {
+        "type": "command",
+        "command": _hook_shell_command(command, args),
+        "timeout": 60,
+        "statusMessage": "EvoInfer Dream checkpoint",
+    }
+    payload = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "startup|resume",
+                    "hooks": [hook],
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [hook],
+                }
+            ],
+            "Stop": [
+                {
+                    "hooks": [hook],
+                }
+            ],
+        }
+    }
+    path = hook_dir / "hooks.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path.resolve()
+
+
+def _build_codex_launch_command(
+    *,
+    workdir: Path,
+    mcp_config_path: Path,
+    prompt: str | None,
+) -> list[str]:
+    server = json.loads(mcp_config_path.read_text(encoding="utf-8"))["mcpServers"][
+        "evoinfer-dream"
+    ]
+    command = [
+        "codex",
+        "--cd",
+        str(workdir),
+        "-s",
+        "danger-full-access",
+        "--dangerously-bypass-hook-trust",
+        "-c",
+        f"mcp_servers.evoinfer-dream.command={_toml_string(server['command'])}",
+        "-c",
+        'mcp_servers.evoinfer-dream.args=["-m","evoinfer_mcp.dream.mcp_server"]',
+    ]
+    env = server.get("env", {})
+    if isinstance(env, dict):
+        for key, value in sorted(env.items()):
+            command.extend(
+                [
+                    "-c",
+                    f"mcp_servers.evoinfer-dream.env.{key}={_toml_string(str(value))}",
+                ]
+            )
+    if prompt:
+        command.append(prompt)
+    return command
+
+
+def _build_claude_launch_command(
+    *,
+    mcp_config_path: Path,
+    hook_config_path: Path,
+    prompt: str | None,
+) -> list[str]:
+    command = [
+        "claude",
+        "--mcp-config",
+        str(mcp_config_path),
+        "--strict-mcp-config",
+        "--settings",
+        str(hook_config_path),
+        "--permission-mode",
+        "bypassPermissions",
+    ]
+    if prompt:
+        command.append(prompt)
+    return command
 
 
 @cli.command("doctor")
@@ -1000,109 +1388,114 @@ async def run_evoinfer_lifecycle_smoke(
         env={"EVOINFER_SHARE_DIR": str(share_dir)},
     )
 
-    async with stdio_client(server) as (read, write), ClientSession(read, write) as session:
-        await session.initialize()
-        await session.call_tool(
-            "dream_get_agent_protocol",
-            arguments={"task_type": "optimization", "workdir": str(workdir)},
-        )
-        phases.append("protocol")
+    with _real_stderr_for_stdio_subprocess():
+        async with stdio_client(
+            server,
+            errlog=sys.__stderr__ or sys.stderr,
+        ) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            await session.call_tool(
+                "dream_get_agent_protocol",
+                arguments={"task_type": "optimization", "workdir": str(workdir)},
+            )
+            phases.append("protocol")
 
-        search = await session.call_tool(
-            "dream_search_memories",
-            arguments={
-                "query": "FLA route policy dtype branch expansion",
-                "category": "optimization",
-                "tags": ["fla", "route_policy"],
-                "top_k": 1,
-                "record_choice": True,
-                "render_mode": "artifact_protocol",
-            },
-        )
-        if "opt_lifecycle_prior" not in _mcp_tool_text(search):
-            raise RuntimeError("lifecycle smoke prior memory was not retrieved")
-        phases.append("search")
+            search = await session.call_tool(
+                "dream_search_memories",
+                arguments={
+                    "query": "FLA route policy dtype branch expansion",
+                    "category": "optimization",
+                    "tags": ["fla", "route_policy"],
+                    "top_k": 1,
+                    "record_choice": True,
+                    "render_mode": "artifact_protocol",
+                },
+            )
+            if "opt_lifecycle_prior" not in _mcp_tool_text(search):
+                raise RuntimeError("lifecycle smoke prior memory was not retrieved")
+            phases.append("search")
 
-        stuck_search = await session.call_tool(
-            "dream_search_memories",
-            arguments={
-                "query": "FLA route policy stuck after broad dtype branch expansion",
-                "category": "optimization",
-                "tags": ["fla", "route_policy"],
-                "top_k": 1,
-                "record_choice": True,
-                "render_mode": "artifact_protocol",
-                "task_context": (
-                    "Simulated branch point: local candidate expansion stalled, "
-                    "so the agent searches Dream again before changing route."
-                ),
-            },
-        )
-        if "opt_lifecycle_prior" not in _mcp_tool_text(stuck_search):
-            raise RuntimeError("lifecycle smoke stuck search did not retrieve prior memory")
-        phases.append("stuck_search")
+            stuck_search = await session.call_tool(
+                "dream_search_memories",
+                arguments={
+                    "query": "FLA route policy stuck after broad dtype branch expansion",
+                    "category": "optimization",
+                    "tags": ["fla", "route_policy"],
+                    "top_k": 1,
+                    "record_choice": True,
+                    "render_mode": "artifact_protocol",
+                    "task_context": (
+                        "Simulated branch point: local candidate expansion stalled, "
+                        "so the agent searches Dream again before changing route."
+                    ),
+                },
+            )
+            if "opt_lifecycle_prior" not in _mcp_tool_text(stuck_search):
+                raise RuntimeError("lifecycle smoke stuck search did not retrieve prior memory")
+            phases.append("stuck_search")
 
-        await session.call_tool(
-            "dream_stage_memory_candidate",
-            arguments={
-                "workdir": str(workdir),
-                "candidate_json": json.dumps(_lifecycle_smoke_candidate_payload()),
-            },
-        )
-        phases.append("stage")
+            await session.call_tool(
+                "dream_stage_memory_candidate",
+                arguments={
+                    "workdir": str(workdir),
+                    "candidate_json": json.dumps(_lifecycle_smoke_candidate_payload()),
+                },
+            )
+            phases.append("stage")
 
-        extract = await session.call_tool(
-            "dream_extract_memory_candidates",
-            arguments={"workdir": str(workdir)},
-        )
-        candidates = json.loads(_mcp_tool_text(extract))["candidates"]
-        promotion_input = _first_promotion_input(candidates)
-        phases.append("extract")
+            extract = await session.call_tool(
+                "dream_extract_memory_candidates",
+                arguments={"workdir": str(workdir)},
+            )
+            candidates = json.loads(_mcp_tool_text(extract))["candidates"]
+            promotion_input = _first_promotion_input(candidates)
+            phases.append("extract")
 
-        write = await session.call_tool(
-            "dream_write_optimization_memory",
-            arguments={"memory_json": json.dumps(promotion_input)},
-        )
-        written_memory = json.loads(_mcp_tool_text(write))["memory"]
-        phases.append("write")
+            write = await session.call_tool(
+                "dream_write_optimization_memory",
+                arguments={"memory_json": json.dumps(promotion_input)},
+            )
+            written_memory = json.loads(_mcp_tool_text(write))["memory"]
+            phases.append("write")
 
-        promote = await session.call_tool(
-            "dream_promote_memory",
-            arguments={
-                "memory_id": written_memory["id"],
-                "reason": "CLI lifecycle smoke verifier artifacts passed.",
-                "evidence_artifacts": [
-                    str(workdir / "baseline.json"),
-                    str(workdir / "candidate.json"),
-                    str(workdir / "correctness.json"),
-                ],
-                "evidence_level": "verified",
-            },
-        )
-        promoted_memory = json.loads(_mcp_tool_text(promote))["memory"]
-        phases.append("promote")
+            promote = await session.call_tool(
+                "dream_promote_memory",
+                arguments={
+                    "memory_id": written_memory["id"],
+                    "reason": "CLI lifecycle smoke verifier artifacts passed.",
+                    "evidence_artifacts": [
+                        str(workdir / "baseline.json"),
+                        str(workdir / "candidate.json"),
+                        str(workdir / "correctness.json"),
+                    ],
+                    "evidence_level": "verified",
+                },
+            )
+            promoted_memory = json.loads(_mcp_tool_text(promote))["memory"]
+            phases.append("promote")
 
-        await session.call_tool(
-            "dream_record_feedback",
-            arguments={
-                "memory_ids": ["opt_lifecycle_prior"],
-                "useful": True,
-                "reason": "CLI lifecycle smoke used prior memory and verifier artifacts passed.",
-                "evidence_artifacts": [
-                    str(workdir / "baseline.json"),
-                    str(workdir / "candidate.json"),
-                    str(workdir / "correctness.json"),
-                ],
-                "source_session_id": "cli-lifecycle-smoke",
-            },
-        )
-        phases.append("feedback")
+            await session.call_tool(
+                "dream_record_feedback",
+                arguments={
+                    "memory_ids": ["opt_lifecycle_prior"],
+                    "useful": True,
+                    "reason": "CLI lifecycle smoke used prior memory and verifier artifacts passed.",
+                    "evidence_artifacts": [
+                        str(workdir / "baseline.json"),
+                        str(workdir / "candidate.json"),
+                        str(workdir / "correctness.json"),
+                    ],
+                    "source_session_id": "cli-lifecycle-smoke",
+                },
+            )
+            phases.append("feedback")
 
-        listed = await session.call_tool("dream_list_memories", arguments={})
-        memories = {
-            memory["id"]: memory for memory in json.loads(_mcp_tool_text(listed))["memories"]
-        }
-        phases.append("list")
+            listed = await session.call_tool("dream_list_memories", arguments={})
+            memories = {
+                memory["id"]: memory
+                for memory in json.loads(_mcp_tool_text(listed))["memories"]
+            }
+            phases.append("list")
 
     campaign_result_path = _write_lifecycle_smoke_campaign_result(workdir)
     from evoinfer_mcp.evoinfer.dream_protocol_verifier import (
@@ -1284,7 +1677,28 @@ async def _list_mcp_stdio_tool_names(share_dir: Path) -> list[str]:
         args=["-m", "evoinfer_mcp.dream.mcp_server"],
         env={"EVOINFER_SHARE_DIR": str(share_dir)},
     )
-    async with stdio_client(server) as (read, write), ClientSession(read, write) as session:
-        await session.initialize()
-        tools = await session.list_tools()
+    with _real_stderr_for_stdio_subprocess():
+        async with stdio_client(
+            server,
+            errlog=sys.__stderr__ or sys.stderr,
+        ) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
     return sorted(tool.name for tool in tools.tools)
+
+
+@contextmanager
+def _real_stderr_for_stdio_subprocess():
+    old = sys.stderr
+    try:
+        old.fileno()
+        yield
+        return
+    except (AttributeError, OSError):
+        pass
+    replacement = sys.__stderr__ or old
+    sys.stderr = replacement
+    try:
+        yield
+    finally:
+        sys.stderr = old

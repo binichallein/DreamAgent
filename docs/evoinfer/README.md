@@ -144,6 +144,33 @@ cannot initiate tool calls by themselves. The enforcement comes from session
 scoping: the agent starts with only this session's config and instructions, and
 the call log makes missed Dream protocol steps auditable.
 
+## Hooked Agent Sessions
+
+For day-to-day use, start a Claude Code or Codex session through EvoInfer so
+Dream is checked during the run, not only at the beginning:
+
+```bash
+uv run evoinfer --client codex --hook-every-steps 10
+uv run evoinfer --client claude --hook-every-steps 10
+```
+
+Running `uv run evoinfer` without options opens a small terminal prompt that asks
+which client to use and how often to checkpoint Dream.
+
+Hook mode writes a dedicated session bundle and launches the chosen agent:
+
+- Claude Code uses `.claude/settings.local.json` with `SessionStart`,
+  `PostToolBatch`, and `Stop` hooks.
+- Codex uses `.codex/hooks.json` with `SessionStart`, `PostToolUse`, and `Stop`
+  hooks, and launches with `--dangerously-bypass-hook-trust` for that generated
+  session.
+- Every N tool checkpoints, the hook runs `evoinfer_mcp.hooks.dream_checkpoint`,
+  searches Dream, writes `dream_context.md`, and injects the checkpoint result
+  back as hook context before the agent continues.
+
+Kimi CLI is not wired into hook mode yet. The current stable hook-backed path is
+Claude Code and Codex only.
+
 ## Soft Protocol For Agents
 
 MCP tools are available only when the agent decides to call them. For reliable

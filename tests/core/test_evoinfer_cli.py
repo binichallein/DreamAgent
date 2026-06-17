@@ -136,6 +136,121 @@ def test_evoinfer_force_session_creates_isolated_mandatory_dream_bundle(
     assert (workdir / "CLAUDE.md").read_text(encoding="utf-8") == protocol
 
 
+def test_evoinfer_root_cli_creates_codex_hooked_session_bundle(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "codex-session"
+    share_dir = tmp_path / "share"
+    workdir = tmp_path / "work"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--client",
+            "codex",
+            "--hook-every-steps",
+            "10",
+            "--session-dir",
+            str(session_dir),
+            "--share-dir",
+            str(share_dir),
+            "--workdir",
+            str(workdir),
+            "--command",
+            "/usr/bin/python3",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["mode"] == "hooked-session"
+    assert payload["client"] == "codex"
+    assert payload["hook_every_steps"] == 10
+    assert payload["hook_config_path"] == str((workdir / ".codex" / "hooks.json").resolve())
+    assert payload["hook_state_path"] == str((session_dir / "hook_state.json").resolve())
+    assert payload["dream_context_path"] == str((session_dir / "dream_context.md").resolve())
+    assert payload["launch_command"][0] == "codex"
+    assert "exec" not in payload["launch_command"]
+    assert "--dangerously-bypass-hook-trust" in payload["launch_command"]
+    assert "kimi" not in payload["commands"]
+
+    hooks = json.loads((workdir / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    assert set(hooks["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
+    post_tool = hooks["hooks"]["PostToolUse"][0]["hooks"][0]
+    assert post_tool["type"] == "command"
+    assert "evoinfer_mcp.hooks.dream_checkpoint" in post_tool["command"]
+    assert "--every-steps 10" in post_tool["command"]
+
+
+def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "claude-session"
+    workdir = tmp_path / "work"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--client",
+            "claude",
+            "--hook-every-steps",
+            "7",
+            "--session-dir",
+            str(session_dir),
+            "--workdir",
+            str(workdir),
+            "--command",
+            "/usr/bin/python3",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["client"] == "claude"
+    assert payload["hook_every_steps"] == 7
+    assert payload["hook_config_path"] == str((workdir / ".claude" / "settings.local.json").resolve())
+    assert payload["launch_command"][0] == "claude"
+    assert "--settings" in payload["launch_command"]
+
+    settings = json.loads(
+        (workdir / ".claude" / "settings.local.json").read_text(encoding="utf-8")
+    )
+    assert set(settings["hooks"]) == {"SessionStart", "PostToolBatch", "Stop"}
+    post_batch = settings["hooks"]["PostToolBatch"][0]["hooks"][0]
+    assert post_batch["type"] == "command"
+    assert post_batch["command"] == "/usr/bin/python3"
+    assert post_batch["args"][:2] == ["-m", "evoinfer_mcp.hooks.dream_checkpoint"]
+    assert "--every-steps" in post_batch["args"]
+    assert "7" in post_batch["args"]
+
+
+def test_evoinfer_root_cli_prompts_for_client_and_step_count(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "interactive-session"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--session-dir",
+            str(session_dir),
+            "--dry-run",
+            "--json",
+        ],
+        input="codex\n6\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert payload["client"] == "codex"
+    assert payload["hook_every_steps"] == 6
+    assert Path(payload["hook_config_path"]).is_file()
+
+
 def test_evoinfer_mcp_config_outputs_codex_toml_template(tmp_path: Path) -> None:
     share_dir = tmp_path / "share"
 
@@ -241,6 +356,8 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     assert "evoinfer mcp-config --client codex" in text
     assert "evoinfer force-session" in text
     assert "mandatory Dream session" in text
+    assert "evoinfer --client codex --hook-every-steps 10" in text
+    assert "Kimi CLI is not wired into hook mode" in text
     assert "claude mcp add-json" in text
     assert "--enable-embedding" in text
 
