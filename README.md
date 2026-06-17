@@ -28,9 +28,9 @@ optimization under incompatible workload, backend, dtype, or operator semantics.
 ```bash
 git clone https://github.com/binichallein/DreamAgent.git
 cd DreamAgent
-uv sync
-uv run evoinfer doctor --json
-uv run evoinfer lifecycle-smoke --json
+uv tool install --force --editable .
+evoinfer doctor --json
+evoinfer lifecycle-smoke --json
 ```
 
 `doctor` checks package imports, share-directory writability, MCP tool surface,
@@ -43,18 +43,17 @@ and protocol verification.
 Generate a Claude Code MCP registration command:
 
 ```bash
-uv run evoinfer mcp-config \
+evoinfer mcp-config \
   --client claude \
   --format claude-add-json \
   --share-dir ~/.evoinfer/dream-share \
-  --command "$(pwd)/.venv/bin/python" \
   --scope user
 ```
 
 Run the printed command once. It will look like:
 
 ```bash
-claude mcp add-json evoinfer-dream '{"type":"stdio","command":"/abs/path/.venv/bin/python","args":["-m","evoinfer_mcp.dream.mcp_server"],"env":{"EVOINFER_SHARE_DIR":"/home/user/.evoinfer/dream-share"}}' --scope user
+claude mcp add-json evoinfer-dream '{"type":"stdio","command":"/abs/path/to/python","args":["-m","evoinfer_mcp.dream.mcp_server"],"env":{"EVOINFER_SHARE_DIR":"/home/user/.evoinfer/dream-share"}}' --scope user
 ```
 
 Verify the registration:
@@ -78,11 +77,10 @@ Inside Claude Code, run:
 Generate a Codex MCP config block:
 
 ```bash
-uv run evoinfer mcp-config \
+evoinfer mcp-config \
   --client codex \
   --format codex-toml \
-  --share-dir ~/.evoinfer/dream-share \
-  --command "$(pwd)/.venv/bin/python"
+  --share-dir ~/.evoinfer/dream-share
 ```
 
 Short form: `evoinfer mcp-config --client codex --format codex-toml`.
@@ -123,11 +121,10 @@ isolated session directory with:
 Create the bundle:
 
 ```bash
-uv run evoinfer force-session \
+evoinfer force-session \
   --session-dir /tmp/evoinfer-dream-session \
   --share-dir ~/.evoinfer/dream-share \
-  --workdir /tmp/evoinfer-dream-session/work \
-  --command "$(pwd)/.venv/bin/python"
+  --workdir /tmp/evoinfer-dream-session/work
 ```
 
 The printed commands run Claude Code, Codex, or Kimi CLI inside that dedicated
@@ -150,11 +147,11 @@ For day-to-day use, start a Claude Code or Codex session through EvoInfer so
 Dream is checked during the run, not only at the beginning:
 
 ```bash
-uv run evoinfer --client codex --hook-every-steps 10
-uv run evoinfer --client claude --hook-every-steps 10
+evoinfer --client codex --hook-every-steps 10
+evoinfer --client claude --hook-every-steps 10
 ```
 
-Running `uv run evoinfer` without options opens a small terminal prompt that asks
+Running `evoinfer` without options opens a small terminal prompt that asks
 which client to use and how often to checkpoint Dream.
 
 Hook mode writes a dedicated session bundle and launches the chosen agent:
@@ -258,8 +255,8 @@ For stronger semantic recall, install the optional embedding dependency and
 enable the local CPU backend in the generated MCP config:
 
 ```bash
-uv sync --extra embedding
-uv run evoinfer mcp-config \
+uv tool install --force --editable ".[embedding]"
+evoinfer mcp-config \
   --client codex \
   --format codex-toml \
   --share-dir ~/.evoinfer/dream-share \
@@ -281,12 +278,10 @@ on CPU. Embedding scores are one retrieval signal, not the final authority.
 Schema filters, workload closeness, correctness evidence, profiler evidence, and
 negative-memory constraints still gate the final result.
 
-## Development Checks
+## Runtime Checks
 
 ```bash
-uv run pytest
-uv run ruff check .
-uv run evoinfer doctor --json
-uv run evoinfer schema --json
-uv run evoinfer lifecycle-smoke --json
+evoinfer doctor --json
+evoinfer schema --json
+evoinfer lifecycle-smoke --json
 ```

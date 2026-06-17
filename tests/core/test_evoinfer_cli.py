@@ -351,6 +351,8 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
 
     assert readme.is_file()
     text = readme.read_text(encoding="utf-8")
+    assert "uv tool install --force --editable ." in text
+    assert "uv run" not in text
     assert "dream_extract_and_write_memories" in text
     assert "evoinfer doctor --json" in text
     assert "evoinfer mcp-config --client codex" in text
