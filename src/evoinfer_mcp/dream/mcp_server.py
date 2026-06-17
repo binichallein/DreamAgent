@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -43,6 +44,23 @@ mcp = FastMCP(
 )
 
 
+def _log_tool_call(name: str, arguments: dict[str, Any] | None = None) -> None:
+    """Append an opt-in JSONL record for client autonomy validation."""
+
+    log_path = os.getenv("EVOINFER_MCP_CALL_LOG")
+    if not log_path:
+        return
+    path = Path(log_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "tool": name,
+        "arguments": arguments or {},
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 @mcp.tool(
     name="dream_get_agent_protocol",
     description=(
@@ -57,6 +75,10 @@ def dream_get_agent_protocol_tool(
 ) -> str:
     """Return a machine-readable protocol for active Dream memory use."""
 
+    _log_tool_call(
+        "dream_get_agent_protocol",
+        {"task_type": task_type, "workdir": workdir},
+    )
     return _json_response(
         {
             "identity": "EvoInfer Dream is an MCP memory manager",
@@ -176,6 +198,18 @@ def dream_search_memories_tool(
 ) -> str:
     """Return a compact, model-readable Dream memory search result."""
 
+    _log_tool_call(
+        "dream_search_memories",
+        {
+            "query": query,
+            "category": category,
+            "tags": tags or [],
+            "top_k": top_k,
+            "record_choice": record_choice,
+            "render_mode": render_mode,
+            "task_context": task_context,
+        },
+    )
     search_query = query
     if task_context:
         search_query = f"{query}\n\nTask context: {task_context}"
@@ -214,6 +248,16 @@ def dream_record_feedback_tool(
 ) -> str:
     """Record useful/not-useful feedback for selected memories."""
 
+    _log_tool_call(
+        "dream_record_feedback",
+        {
+            "memory_ids": memory_ids,
+            "useful": useful,
+            "reason": reason,
+            "evidence_artifacts": evidence_artifacts or [],
+            "source_session_id": source_session_id,
+        },
+    )
     response = record_dream_memory_feedback(
         DreamMemoryFeedbackInput(
             memory_ids=memory_ids,
@@ -242,6 +286,10 @@ def dream_record_feedback_tool(
     ),
 )
 def dream_write_optimization_memory_tool(memory_json: str) -> str:
+    _log_tool_call(
+        "dream_write_optimization_memory",
+        {"memory_json_chars": len(memory_json)},
+    )
     payload = _load_json_object(memory_json)
     memory = create_optimization_memory(OptimizationMemoryInput.model_validate(payload))
     return _json_response({"memory": memory.model_dump(mode="json", exclude_none=True)})
@@ -256,6 +304,10 @@ def dream_write_optimization_memory_tool(memory_json: str) -> str:
     ),
 )
 def dream_write_environment_debug_memory_tool(memory_json: str) -> str:
+    _log_tool_call(
+        "dream_write_environment_debug_memory",
+        {"memory_json_chars": len(memory_json)},
+    )
     payload = _load_json_object(memory_json)
     memory = create_environment_debug_memory(
         EnvironmentDebugMemoryInput.model_validate(payload)
@@ -345,6 +397,10 @@ def dream_import_memory_store_tool(memory_store_json: str, dry_run: bool = True)
     ),
 )
 def dream_stage_memory_candidate_tool(workdir: str, candidate_json: str) -> str:
+    _log_tool_call(
+        "dream_stage_memory_candidate",
+        {"workdir": workdir, "candidate_json_chars": len(candidate_json)},
+    )
     root = Path(workdir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     candidate = _sanitize_staged_candidate(root, _load_json_object(candidate_json))
@@ -385,6 +441,10 @@ def dream_extract_memory_candidates_tool(
     workdir: str,
     category_hint: Literal["optimization", "environment_debug"] | None = None,
 ) -> str:
+    _log_tool_call(
+        "dream_extract_memory_candidates",
+        {"workdir": workdir, "category_hint": category_hint},
+    )
     root = Path(workdir)
     candidates_path = root / "dream_write_candidates.json"
     raw = _read_candidate_list(candidates_path)
@@ -448,6 +508,10 @@ def dream_extract_and_write_memories_tool(
     category_hint: Literal["optimization", "environment_debug"] | None = None,
     dry_run: bool = False,
 ) -> str:
+    _log_tool_call(
+        "dream_extract_and_write_memories",
+        {"workdir": workdir, "category_hint": category_hint, "dry_run": dry_run},
+    )
     extraction = json.loads(
         dream_extract_memory_candidates_tool(
             workdir=workdir,
@@ -552,6 +616,15 @@ def dream_promote_memory_tool(
     evidence_artifacts: list[str] | None = None,
     evidence_level: DreamMemoryEvidenceLevel = "verified",
 ) -> str:
+    _log_tool_call(
+        "dream_promote_memory",
+        {
+            "memory_id": memory_id,
+            "reason": reason,
+            "evidence_artifacts": evidence_artifacts or [],
+            "evidence_level": evidence_level,
+        },
+    )
     if not reason.strip():
         raise ValueError("promotion reason is required")
     decision_artifacts = _require_decision_artifacts(
@@ -589,6 +662,15 @@ def dream_reject_memory_tool(
     evidence_artifacts: list[str] | None = None,
     negative: bool = False,
 ) -> str:
+    _log_tool_call(
+        "dream_reject_memory",
+        {
+            "memory_id": memory_id,
+            "reason": reason,
+            "evidence_artifacts": evidence_artifacts or [],
+            "negative": negative,
+        },
+    )
     if not reason.strip():
         raise ValueError("rejection reason is required")
     decision_artifacts = _require_decision_artifacts(
@@ -636,6 +718,16 @@ def search_dream_memories_tool(
     top_k: int = 5,
     record_choice: bool = True,
 ) -> str:
+    _log_tool_call(
+        "search_dream_memories",
+        {
+            "query": query,
+            "category": category,
+            "tags": tags or [],
+            "top_k": top_k,
+            "record_choice": record_choice,
+        },
+    )
     return dream_search_memories_tool(
         query=query,
         category=category,
@@ -659,6 +751,16 @@ def record_dream_memory_feedback_tool(
     evidence_artifacts: list[str] | None = None,
     source_session_id: str | None = None,
 ) -> str:
+    _log_tool_call(
+        "record_dream_memory_feedback",
+        {
+            "memory_ids": memory_ids,
+            "useful": useful,
+            "reason": reason,
+            "evidence_artifacts": evidence_artifacts or [],
+            "source_session_id": source_session_id,
+        },
+    )
     return dream_record_feedback_tool(
         memory_ids=memory_ids,
         useful=useful,
