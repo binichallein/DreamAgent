@@ -109,7 +109,7 @@ def test_dream_mcp_search_lazily_seeds_empty_shared_store(tmp_path, monkeypatch)
     assert "opt_seed_cuda_softmax_shared_memory_v1" in text
     persisted = json.loads(memory_file.read_text(encoding="utf-8"))
     by_id = {memory["id"]: memory for memory in persisted["memories"]}
-    assert len(by_id) == 9
+    assert len(by_id) == 13
     assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["title"].startswith("CUDA row-wise")
 
 

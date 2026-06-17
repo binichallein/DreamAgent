@@ -437,6 +437,242 @@
       "evidence_level": "verified",
       "success": true,
       "source_session_id": "seed"
+    },
+    {
+      "id": "opt_seed_vllm_paged_attention_decode_rtx3090_v1",
+      "category": "optimization",
+      "title": "vLLM paged attention decode wins on tested RTX 3090 shapes",
+      "summary": "On limx RTX 3090, vLLM PagedAttention decode beat an explicit torch softmax reference by 1.85x-7.94x on three fp16 decode workloads.",
+      "tags": ["vllm", "attention", "paged_attention", "decode", "rtx3090", "fp16", "transfer-policy"],
+      "environment": "limx RTX 3090, vLLM 0.10.2, torch 2.8.0+cu126",
+      "model_type": "llm",
+      "model_arch": "decoder-only transformer attention",
+      "inference_backend": "vllm",
+      "serving_framework": "vllm",
+      "precision": {"dtype": "float16"},
+      "workload": {
+        "operator": "decode_attention",
+        "kv_cache": "paged",
+        "cases": [
+          {"batch": 1, "seq": 512, "heads": 8, "head_dim": 64},
+          {"batch": 1, "seq": 2048, "heads": 8, "head_dim": 64},
+          {"batch": 4, "seq": 2048, "heads": 16, "head_dim": 64}
+        ]
+      },
+      "metrics_before": {
+        "backend": "explicit torch matmul/einsum softmax reference",
+        "b1_s512_h8_d64_ms": 0.04741760026663542,
+        "b1_s2048_h8_d64_ms": 0.0519399993121624,
+        "b4_s2048_h16_d64_ms": 0.45384239926934244
+      },
+      "metrics_after": {
+        "backend": "vLLM PagedAttention.forward_decode",
+        "b1_s512_h8_d64_ms": 0.019175600027665496,
+        "b1_s2048_h8_d64_ms": 0.028108400083146988,
+        "b4_s2048_h16_d64_ms": 0.05716680041514337,
+        "mean_speedup_vs_torch_ref": 4.086523631598341,
+        "min_speedup_vs_torch_ref": 1.847846165506381,
+        "max_speedup_vs_torch_ref": 7.938915523932673
+      },
+      "objective_metric": "latency_ms",
+      "success": true,
+      "detail_description": "Use vLLM PagedAttention for decode workloads with paged KV cache when the workload matches the tested decode shapes. The experiment wrote KV cache through vLLM cache APIs, then compared decode output against a shape-matched torch softmax reference.",
+      "applicability": "Applies to fp16 decode attention with paged KV cache on RTX 3090-class GPUs and similar vLLM/torch/CUDA versions.",
+      "caveats": "Re-check block size, KV head layout, mask semantics, dtype, and vLLM version before transferring.",
+      "operation_semantics": ["decoder attention", "paged KV-cache decode", "softmax(QK^T/sqrt(D))V"],
+      "correctness_invariants": ["max_abs_error <= 1e-3 against explicit torch reference", "match batch/seq/heads/head_dim/dtype before reuse"],
+      "safe_transfer_notes": ["Try vLLM paged attention before writing custom decode kernels on matching workloads."],
+      "unsafe_transfer_notes": ["Do not transfer to prefill attention, sliding-window masks, different KV head grouping, or fp8 without new artifacts."],
+      "benchmark_command": "seed://evoinfer/limx/backend_attention_20260617/run_backend_attention_bench.py --backend vllm",
+      "baseline_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/benchmark_raw.json"],
+      "optimized_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/vllm_attention_benchmark_raw.json"],
+      "correctness_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json"],
+      "profiler_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/profiler_summary.json"],
+      "artifact_refs": [
+        "seed://evoinfer/limx/backend_attention_20260617/vllm_attention_benchmark_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/verifier_result.json"
+      ],
+      "status": "promoted",
+      "evidence_level": "verified",
+      "promotion_reason": "Verified by limx backend-attention benchmark with correctness and timing artifacts.",
+      "chosen": 0,
+      "useful_when_chosen": 0,
+      "useful_rate": 0.0,
+      "source_session_id": "limx_backend_attention_20260617"
+    },
+    {
+      "id": "opt_seed_sglang_flash_attention_decode_rtx3090_v1",
+      "category": "optimization",
+      "title": "SGLang flash attention decode wins on tested RTX 3090 shapes",
+      "summary": "On limx RTX 3090, sgl_kernel flash_attn_with_kvcache beat an explicit torch softmax reference by 1.62x-4.13x on three fp16 decode workloads.",
+      "tags": ["sglang", "sgl_kernel", "attention", "flash_attention", "decode", "rtx3090", "fp16", "transfer-policy"],
+      "environment": "limx RTX 3090, SGLang 0.5.13.post1, sgl_kernel importable, torch 2.11.0+cu130",
+      "model_type": "llm",
+      "model_arch": "decoder-only transformer attention",
+      "inference_backend": "sglang",
+      "serving_framework": "sglang/sgl_kernel",
+      "precision": {"dtype": "float16"},
+      "workload": {
+        "operator": "decode_attention",
+        "kv_cache": "contiguous",
+        "cases": [
+          {"batch": 1, "seq": 512, "heads": 8, "head_dim": 64},
+          {"batch": 1, "seq": 2048, "heads": 8, "head_dim": 64},
+          {"batch": 4, "seq": 2048, "heads": 16, "head_dim": 64}
+        ]
+      },
+      "metrics_before": {
+        "backend": "explicit torch matmul/einsum softmax reference",
+        "b1_s512_h8_d64_ms": 0.05746879978105426,
+        "b1_s2048_h8_d64_ms": 0.05718159982934594,
+        "b4_s2048_h16_d64_ms": 0.4578728020191193
+      },
+      "metrics_after": {
+        "backend": "sgl_kernel.flash_attn_with_kvcache",
+        "b1_s512_h8_d64_ms": 0.03109999969601631,
+        "b1_s2048_h8_d64_ms": 0.035253600357100366,
+        "b4_s2048_h16_d64_ms": 0.11099519990384579,
+        "mean_speedup_vs_torch_ref": 2.531679119131237,
+        "min_speedup_vs_torch_ref": 1.6220073765552032,
+        "max_speedup_vs_torch_ref": 4.125158587180082
+      },
+      "objective_metric": "latency_ms",
+      "success": true,
+      "detail_description": "Use SGLang sgl_kernel flash_attn_with_kvcache as a decode-attention route on matching fp16 KV-cache workloads. Full sglang import can fail from torch/torchvision CUDA-major mismatch, but the kernel package itself can still import and run.",
+      "applicability": "Applies to fp16 decode attention with contiguous KV cache when sgl_kernel is available and FA3 support check passes.",
+      "caveats": "Probe sgl_kernel separately before rejecting the route because full SGLang import may fail for unrelated dependency reasons.",
+      "operation_semantics": ["decoder attention", "KV-cache decode", "softmax(QK^T/sqrt(D))V"],
+      "correctness_invariants": ["max_abs_error <= 1e-3 against explicit torch reference", "cache_seqlens and layout must match the kernel docstring"],
+      "safe_transfer_notes": ["Try sgl_kernel flash_attn_with_kvcache for decode attention before custom kernels on matching workloads."],
+      "unsafe_transfer_notes": ["Do not reject sgl_kernel solely because full sglang import fails; inspect the kernel package separately."],
+      "benchmark_command": "seed://evoinfer/limx/backend_attention_20260617/run_backend_attention_bench.py --backend sglang",
+      "baseline_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/benchmark_raw.json"],
+      "optimized_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/sglang_attention_benchmark_raw.json"],
+      "correctness_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json"],
+      "profiler_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/profiler_summary.json"],
+      "artifact_refs": [
+        "seed://evoinfer/limx/backend_attention_20260617/sglang_attention_benchmark_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/verifier_result.json"
+      ],
+      "status": "promoted",
+      "evidence_level": "verified",
+      "promotion_reason": "Verified by limx backend-attention benchmark with correctness and timing artifacts.",
+      "chosen": 0,
+      "useful_when_chosen": 0,
+      "useful_rate": 0.0,
+      "source_session_id": "limx_backend_attention_20260617"
+    },
+    {
+      "id": "opt_seed_tensorrt_attention_transfer_policy_rtx3090_v1",
+      "category": "optimization",
+      "title": "TensorRT attention subgraph has mixed transfer on RTX 3090",
+      "summary": "TensorRT 11 fixed-shape MatMul-Softmax-MatMul attention passed correctness, but batch=1 seq=2048 was slower than the torch reference.",
+      "tags": ["tensorrt", "attention", "negative-transfer", "workload-filter", "rtx3090", "fp16", "transfer-policy"],
+      "environment": "limx RTX 3090, TensorRT 11.1.0.106, torch 2.8.0+cu126 used for CUDA buffers",
+      "model_type": "llm",
+      "model_arch": "decoder-only transformer attention subgraph",
+      "inference_backend": "tensorrt",
+      "serving_framework": "TensorRT network API",
+      "precision": {"dtype": "float16"},
+      "workload": {
+        "operator": "attention_subgraph",
+        "graph": "MatMul-Scale-Softmax-MatMul",
+        "positive_cases": [
+          {"batch": 1, "seq": 512, "heads": 8, "head_dim": 64},
+          {"batch": 4, "seq": 2048, "heads": 16, "head_dim": 64}
+        ],
+        "negative_cases": [
+          {"batch": 1, "seq": 2048, "heads": 8, "head_dim": 64}
+        ]
+      },
+      "metrics_before": {
+        "backend": "explicit torch matmul softmax reference",
+        "b1_s512_h8_d64_ms": 0.03658080054447055,
+        "b1_s2048_h8_d64_ms": 0.049724800512194633,
+        "b4_s2048_h16_d64_ms": 0.23518640100955962
+      },
+      "metrics_after": {
+        "backend": "TensorRT fixed-shape attention subgraph",
+        "b1_s512_h8_d64_ms": 0.032976399874314666,
+        "b1_s2048_h8_d64_ms": 0.10862959930673241,
+        "b4_s2048_h16_d64_ms": 0.13017680291086436,
+        "mean_speedup_vs_torch_ref": 1.1245726043727289,
+        "min_speedup_vs_torch_ref": 0.45774633092209976,
+        "max_speedup_vs_torch_ref": 1.8066690512486945
+      },
+      "objective_metric": "latency_ms",
+      "success": true,
+      "detail_description": "TensorRT can compile and execute a fixed-shape fp16 attention subgraph on RTX 3090, but it is not a universal win. The tested batch=1 seq=2048 case was slower than torch, while batch=1 seq=512 and batch=4 seq=2048 were faster.",
+      "applicability": "Use as a route-policy memory when evaluating TensorRT for fixed-shape attention subgraphs.",
+      "caveats": "Do not transfer to dynamic-shape engines, fused plugins, full model engines, or different streams without fresh benchmark.",
+      "operation_semantics": ["fixed-shape attention subgraph", "softmax(QK^T/sqrt(D))V"],
+      "correctness_invariants": ["max_abs_error <= 1e-3 against explicit torch reference", "record positive and negative transfer cases separately"],
+      "safe_transfer_notes": ["Try TensorRT only after matching batch/seq/head shape and deployment constraints."],
+      "unsafe_transfer_notes": ["Do not assume TensorRT attention is faster for batch=1 seq=2048 on RTX 3090; this tested shape was a negative transfer."],
+      "benchmark_command": "seed://evoinfer/limx/backend_attention_20260617/run_tensorrt_attention_bench.py",
+      "baseline_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/benchmark_raw.json"],
+      "optimized_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/tensorrt_attention_benchmark_raw.json"],
+      "correctness_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json"],
+      "profiler_artifacts": ["seed://evoinfer/limx/backend_attention_20260617/profiler_summary.json"],
+      "artifact_refs": [
+        "seed://evoinfer/limx/backend_attention_20260617/tensorrt_attention_benchmark_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/correctness_raw.json",
+        "seed://evoinfer/limx/backend_attention_20260617/verifier_result.json"
+      ],
+      "status": "promoted",
+      "evidence_level": "verified",
+      "promotion_reason": "Verified by limx TensorRT attention subgraph benchmark, including a recorded negative-transfer case.",
+      "chosen": 0,
+      "useful_when_chosen": 0,
+      "useful_rate": 0.0,
+      "source_session_id": "limx_backend_attention_20260617"
+    },
+    {
+      "id": "env_seed_tensorrt_nvidia_pypi_index_v1",
+      "category": "environment_debug",
+      "title": "TensorRT pip install needs NVIDIA PyPI index for binary libs",
+      "summary": "Installing tensorrt-cu12 from a normal mirror can stall at source metadata/libs; adding https://pypi.nvidia.com resolved the TensorRT runtime wheel download.",
+      "tags": ["tensorrt", "pip", "pypi.nvidia.com", "install", "cuda12", "environment-debug"],
+      "debug_type": "install",
+      "component": "tensorrt-cu12 Python package",
+      "hardware": "limx RTX 3090",
+      "os": "Ubuntu/Linux on limx-MS-7D99",
+      "driver": "NVIDIA driver 580.126.18 observed",
+      "runtime": "Python 3.12 venv, TensorRT 11.1.0.106, CUDA 12.x wheels",
+      "dependency_stack": {"python": "3.12", "package": "tensorrt-cu12==11.1.0.106", "index_required": "https://pypi.nvidia.com"},
+      "issue_signature": "Collecting tensorrt_cu12_libs stalls or is extremely slow without NVIDIA package index",
+      "symptoms": "pip install tensorrt/tensorrt-cu12 stayed in metadata/download stage when only a standard PyPI mirror and PyTorch wheel index were configured.",
+      "root_cause": "TensorRT runtime libraries are distributed via NVIDIA's Python package index; the normal mirror path may only expose source shim packages or slow binary resolution.",
+      "solution": "Install with a normal mirror plus --extra-index-url https://pypi.nvidia.com, then verify import of tensorrt, onnx, and numpy.",
+      "verification": "The command installed tensorrt-cu12 11.1.0.106, tensorrt_cu12_libs 11.1.0.106, tensorrt_cu12_bindings 11.1.0.106 and import probing returned true for tensorrt/onnx/numpy.",
+      "related_backend": "tensorrt",
+      "risk": "The runtime wheel is about 4.3GB; check disk and network before starting. Match CUDA/TensorRT version to the target deployment stack.",
+      "commands": [
+        "python -m pip install tensorrt-cu12 onnx numpy -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.nvidia.com"
+      ],
+      "error_messages": ["Preparing metadata for tensorrt_cu12_libs stalled without NVIDIA index"],
+      "diagnostic_steps": [
+        "Tried standard mirror plus PyTorch cu126 index.",
+        "Observed stall at tensorrt_cu12_libs.",
+        "Restarted install with NVIDIA PyPI extra index.",
+        "Verified imports."
+      ],
+      "prevention": "For TensorRT Python installs, include NVIDIA PyPI index from the first attempt and record wheel size in setup plans.",
+      "diagnostic_artifacts": ["seed://evoinfer/limx/backend_full_install_20260617/install_tensorrt_cu12.log"],
+      "verification_artifacts": ["seed://evoinfer/limx/backend_full_install_20260617/install_tensorrt_nvidia.log"],
+      "resolved_by_command": "python -m pip install tensorrt-cu12 onnx numpy -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.nvidia.com",
+      "environment_snapshot": {"machine": "limx-MS-7D99", "gpu": "NVIDIA GeForce RTX 3090", "disk_free_after_install": "114G"},
+      "artifact_refs": ["seed://evoinfer/limx/backend_full_install_20260617/install_tensorrt_nvidia.log"],
+      "status": "promoted",
+      "evidence_level": "verified",
+      "success": true,
+      "promotion_reason": "Verified by successful TensorRT install and import probe on limx.",
+      "chosen": 0,
+      "useful_when_chosen": 0,
+      "useful_rate": 0.0,
+      "source_session_id": "limx_backend_attention_20260617"
     }
   ]
 }

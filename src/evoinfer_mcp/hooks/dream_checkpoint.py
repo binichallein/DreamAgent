@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -170,11 +171,22 @@ def _run_completion_extraction(*, share_dir: Path, cwd: Path) -> str:
 def _build_search_query(event: dict[str, Any], *, cwd: Path, trigger: str) -> str:
     task_text = _read_small(cwd / "TASK.md", limit=3000)
     artifact_names = [name for name in _ARTIFACT_FILES if (cwd / name).exists()]
+    search_hints = _normalized_search_hints(
+        {
+            "tool_name": event.get("tool_name"),
+            "tool_input": event.get("tool_input"),
+            "tool_response": event.get("tool_response"),
+            "tool_calls": _compact_tool_calls(event.get("tool_calls")),
+            "artifact_files": artifact_names,
+            "task_text": task_text,
+        }
+    )
     compact_event = {
         "trigger": trigger,
         "hook_event_name": event.get("hook_event_name"),
         "tool_name": event.get("tool_name"),
         "tool_input": event.get("tool_input"),
+        "tool_response": event.get("tool_response"),
         "tool_calls": _compact_tool_calls(event.get("tool_calls")),
         "artifact_files": artifact_names,
     }
@@ -183,6 +195,7 @@ def _build_search_query(event: dict[str, Any], *, cwd: Path, trigger: str) -> st
         for part in [
             "EvoInfer inference optimization or environment-debug checkpoint.",
             f"Task file:\n{task_text}" if task_text else "",
+            f"Search hints:\n{search_hints}" if search_hints else "",
             f"Hook event:\n{json.dumps(compact_event, ensure_ascii=False, default=str)[:4000]}",
         ]
         if part
@@ -203,6 +216,13 @@ def _compact_tool_calls(value: Any) -> list[dict[str, Any]]:
             }
         )
     return compact
+
+
+def _normalized_search_hints(value: Any) -> str:
+    raw = json.dumps(value, ensure_ascii=False, default=str)
+    normalized = re.sub(r"[^0-9A-Za-z]+", " ", raw).lower()
+    tokens = [token for token in normalized.split() if len(token) > 1]
+    return " ".join(dict.fromkeys(tokens[:120]))
 
 
 def _hook_output(

@@ -66,7 +66,7 @@ def test_evoinfer_mcp_config_defaults_to_shared_seeded_store(
     server = payload["mcpServers"]["evoinfer-dream"]
     assert server["env"]["EVOINFER_SHARE_DIR"] == str(share_dir.resolve())
     memories = json.loads((share_dir / "dream" / "memories.json").read_text(encoding="utf-8"))
-    assert len(memories["memories"]) == 9
+    assert len(memories["memories"]) == 13
 
 
 def test_evoinfer_mcp_config_can_enable_cpu_embedding_backend(
@@ -238,7 +238,7 @@ def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
     assert payload["client"] == "claude"
     assert payload["hook_every_steps"] == 7
     assert payload["share_dir"] == str((tmp_path / "home" / ".evoinfer" / "dream-share").resolve())
-    assert payload["seed_memory_merge"]["imported_count"] == 9
+    assert payload["seed_memory_merge"]["imported_count"] == 13
     assert payload["hook_config_path"] == str((workdir / ".claude" / "settings.local.json").resolve())
     assert payload["launch_command"][0] == "claude"
     assert "--settings" in payload["launch_command"]
@@ -596,12 +596,12 @@ def test_evoinfer_memory_seed_merges_packaged_memories_without_overwriting(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["seed_count"] == 9
-    assert payload["imported_count"] == 8
+    assert payload["seed_count"] == 13
+    assert payload["imported_count"] == 12
     assert "opt_seed_cuda_softmax_shared_memory_v1" not in payload["memory_ids"]
     persisted = json.loads(memory_file.read_text(encoding="utf-8"))["memories"]
     by_id = {memory["id"]: memory for memory in persisted}
-    assert len(by_id) == 9
+    assert len(by_id) == 13
     assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["title"] == "Local edited Softmax memory"
     assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["chosen"] == 9
 

@@ -32,9 +32,10 @@ experience without overwriting local user memories.
 
 Current packaged experience includes CUDA softmax/RMSNorm operator memories,
 FlashInfer attention baseline evidence, FLA route-policy campaign evidence, a
-limx FLA parallel-attention boundary memory against PyTorch SDPA, and reusable
-environment-debug memories for FlashInfer JIT, voice STT CPU fallback, and
-vLLM/SGLang/TensorRT wheel-download stalls.
+limx FLA parallel-attention boundary memory against PyTorch SDPA, verified
+limx backend-attention route memories for vLLM, SGLang, and TensorRT, and
+reusable environment-debug memories for FlashInfer JIT, TensorRT NVIDIA PyPI
+setup, voice STT CPU fallback, and vLLM/SGLang/TensorRT wheel-download stalls.
 
 You can seed or inspect the local store manually:
 
