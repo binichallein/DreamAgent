@@ -9,6 +9,29 @@ the memory/control component that an agent can call through MCP when it needs
 optimization experience, deployment-debug experience, artifact-based memory
 extraction, or feedback updates.
 
+## Shared Local Memory
+
+EvoInfer does not cold-start every session. The package ships with a versioned
+seed memory store at `src/evoinfer_mcp/dream/seed_memories.json`. When you start
+an EvoInfer-managed session or generate an MCP config, EvoInfer merges any
+missing seed memories into your local durable store:
+
+```text
+~/.evoinfer/dream-share/dream/memories.json
+```
+
+The merge is idempotent and never overwrites local memories with the same ID, so
+your feedback counters, promoted memories, and edits remain authoritative.
+Claude/Codex sessions launched through `evoinfer` share this same local store
+unless you explicitly pass `--share-dir`.
+
+You can seed or inspect the local store manually:
+
+```bash
+evoinfer memory-seed --json
+evoinfer memory-export --json
+```
+
 ## What It Stores
 
 EvoInfer currently manages two memory categories:
@@ -37,6 +60,12 @@ evoinfer lifecycle-smoke --json
 and stdio startup. `lifecycle-smoke` runs a local end-to-end memory flow:
 protocol, search, stuck search, stage, extract, write, promote, feedback, list,
 and protocol verification.
+
+To explicitly initialize the shared local memory store:
+
+```bash
+evoinfer memory-seed --json
+```
 
 ## Claude Code Setup
 
@@ -281,6 +310,7 @@ negative-memory constraints still gate the final result.
 ## Runtime Checks
 
 ```bash
+evoinfer memory-seed --json
 evoinfer doctor --json
 evoinfer schema --json
 evoinfer lifecycle-smoke --json

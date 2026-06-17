@@ -10,6 +10,7 @@ import re
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, Self
 
@@ -515,6 +516,10 @@ def dream_memory_file() -> Path:
     return get_share_dir() / "dream" / "memories.json"
 
 
+def dream_memory_file_for_share_dir(share_dir: Path) -> Path:
+    return share_dir.expanduser() / "dream" / "memories.json"
+
+
 @contextlib.contextmanager
 def _locked_file(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -578,6 +583,46 @@ def restore_dream_memory_snapshot(snapshot: DreamMemorySnapshotInput) -> list[Dr
     with _locked_file(memory_file):
         _write_memories_unlocked(memory_file, memories)
     return memories
+
+
+def load_packaged_seed_memories() -> list[DreamMemory]:
+    """Load the versioned seed memories shipped with EvoInfer Dream."""
+
+    seed_text = (
+        resources.files("evoinfer_mcp.dream")
+        .joinpath("seed_memories.json")
+        .read_text(encoding="utf-8")
+    )
+    payload = json.loads(seed_text)
+    raw_memories = payload.get("memories", payload)
+    snapshot = DreamMemorySnapshotInput.model_validate({"memories": raw_memories})
+    return list(snapshot.memories)
+
+
+def merge_packaged_seed_memories(share_dir: Path | None = None) -> dict[str, Any]:
+    """Merge packaged seed memories into a user's durable store without overwriting.
+
+    Seed memories prevent cold-start retrieval, but the user's local store remains
+    authoritative. Existing IDs are preserved so local feedback counters,
+    promotions, and edits are not reset by package upgrades.
+    """
+
+    memory_file = dream_memory_file_for_share_dir(share_dir) if share_dir else dream_memory_file()
+    seed_memories = load_packaged_seed_memories()
+    with _locked_file(memory_file):
+        existing_memories = _read_memories_unlocked(memory_file)
+        existing_ids = {memory.id for memory in existing_memories}
+        imported = [memory for memory in seed_memories if memory.id not in existing_ids]
+        if imported:
+            _write_memories_unlocked(memory_file, [*existing_memories, *imported])
+    return {
+        "share_dir": str(memory_file.parents[1]),
+        "memory_file": str(memory_file),
+        "seed_count": len(seed_memories),
+        "imported_count": len(imported),
+        "existing_count": len(existing_memories),
+        "memory_ids": [memory.id for memory in imported],
+    }
 
 
 def _write_memories_unlocked(memory_file: Path, memories: list[DreamMemory]) -> None:

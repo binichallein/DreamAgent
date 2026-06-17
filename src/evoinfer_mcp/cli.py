@@ -269,7 +269,7 @@ def evoinfer_main(
         Path | None,
         typer.Option(
             "--share-dir",
-            help="Durable Dream memory store. Defaults to SESSION_DIR/share.",
+            help="Durable Dream memory store. Defaults to the shared user store.",
         ),
     ] = None,
     workdir: Annotated[
@@ -360,6 +360,20 @@ def click_choice(values: list[str]):
     return click.Choice(values, case_sensitive=False)
 
 
+def _resolve_evoinfer_share_dir(share_dir: Path | None) -> Path:
+    if share_dir is not None:
+        return share_dir.expanduser().resolve()
+    from evoinfer_mcp.share import get_share_dir
+
+    return get_share_dir().expanduser().resolve()
+
+
+def _merge_packaged_seed_memories_for_share_dir(share_dir: Path) -> dict[str, object]:
+    from evoinfer_mcp.dream.memory import merge_packaged_seed_memories
+
+    return merge_packaged_seed_memories(share_dir)
+
+
 @cli.command("mcp-config")
 def evoinfer_mcp_config(
     client: Annotated[
@@ -416,11 +430,13 @@ def evoinfer_mcp_config(
 ) -> None:
     """Print a JSON MCP config for EvoInfer Dream."""
 
+    resolved_share_dir = _resolve_evoinfer_share_dir(share_dir)
+    _merge_packaged_seed_memories_for_share_dir(resolved_share_dir)
     typer.echo(
         render_evoinfer_mcp_config_template(
             client=client,
             config_format=config_format,
-            share_dir=share_dir,
+            share_dir=resolved_share_dir,
             command=command,
             scope=scope,
             enable_embedding=enable_embedding,
@@ -474,7 +490,7 @@ def evoinfer_force_session(
         Path | None,
         typer.Option(
             "--share-dir",
-            help="Durable Dream memory store for this session. Defaults to SESSION_DIR/share.",
+            help="Durable Dream memory store. Defaults to the shared user store.",
         ),
     ] = None,
     workdir: Annotated[
@@ -528,7 +544,7 @@ def build_evoinfer_force_session_bundle(
     command: str,
 ) -> dict[str, object]:
     session_dir = session_dir.expanduser().resolve()
-    share_dir = (share_dir or session_dir / "share").expanduser().resolve()
+    share_dir = _resolve_evoinfer_share_dir(share_dir)
     workdir = (workdir or session_dir / "work").expanduser().resolve()
     call_log_path = session_dir / "mcp_calls.jsonl"
     mcp_config_path = session_dir / "mcp.json"
@@ -537,6 +553,7 @@ def build_evoinfer_force_session_bundle(
     session_dir.mkdir(parents=True, exist_ok=True)
     share_dir.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
+    seed_merge = _merge_packaged_seed_memories_for_share_dir(share_dir)
 
     server = build_evoinfer_mcp_server_config(
         share_dir=share_dir,
@@ -626,6 +643,7 @@ def build_evoinfer_force_session_bundle(
         "mcp_config_path": str(mcp_config_path),
         "call_log_path": str(call_log_path),
         "instruction_paths": [str(path) for path in instruction_paths],
+        "seed_memory_merge": seed_merge,
         "commands": commands,
     }
 
@@ -1001,6 +1019,37 @@ def evoinfer_memory_export(
         typer.echo(text)
     else:
         typer.echo(f"Exported {len(payload.get('memories', []))} Dream memories to {output}")
+
+
+@cli.command("memory-seed")
+def evoinfer_memory_seed(
+    share_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--share-dir",
+            help="Durable Dream memory store. Defaults to the shared user store.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    """Merge packaged EvoInfer Dream seed memories into the local store."""
+
+    resolved_share_dir = _resolve_evoinfer_share_dir(share_dir)
+    payload = _merge_packaged_seed_memories_for_share_dir(resolved_share_dir)
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        "Seeded EvoInfer Dream memories: "
+        f"{payload['imported_count']} imported, {payload['seed_count']} packaged"
+    )
+    typer.echo(f"Share dir: {payload['share_dir']}")
+    if payload["memory_ids"]:
+        typer.echo("Imported IDs: " + ", ".join(str(item) for item in payload["memory_ids"]))
 
 
 @cli.command("memory-import")

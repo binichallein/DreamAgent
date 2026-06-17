@@ -10,10 +10,10 @@ def get_share_dir() -> Path:
     """Return the EvoInfer share directory.
 
     `EVOINFER_SHARE_DIR` is the canonical variable. If it is not set, EvoInfer
-    stores data under `~/.evoinfer`.
+    stores data under `~/.evoinfer/dream-share`.
     """
 
     configured = os.getenv("EVOINFER_SHARE_DIR")
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".evoinfer"
+    return Path.home() / ".evoinfer" / "dream-share"

@@ -8,6 +8,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from evoinfer_mcp.cli import cli
+from evoinfer_mcp.dream.memory import DreamMemorySearchInput, search_dream_memories
 
 
 def test_evoinfer_mcp_config_outputs_codex_compatible_stdio_config(
@@ -45,6 +46,27 @@ def test_evoinfer_mcp_config_outputs_claude_compatible_stdio_config(
         "evoinfer_mcp.dream.mcp_server",
     ]
     assert payload["client"] == "claude"
+
+
+def test_evoinfer_mcp_config_defaults_to_shared_seeded_store(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EVOINFER_SHARE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    result = CliRunner().invoke(
+        cli,
+        ["mcp-config", "--client", "codex"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    share_dir = tmp_path / "home" / ".evoinfer" / "dream-share"
+    server = payload["mcpServers"]["evoinfer-dream"]
+    assert server["env"]["EVOINFER_SHARE_DIR"] == str(share_dir.resolve())
+    memories = json.loads((share_dir / "dream" / "memories.json").read_text(encoding="utf-8"))
+    assert len(memories["memories"]) == 7
 
 
 def test_evoinfer_mcp_config_can_enable_cpu_embedding_backend(
@@ -186,7 +208,10 @@ def test_evoinfer_root_cli_creates_codex_hooked_session_bundle(
 
 def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.delenv("EVOINFER_SHARE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     session_dir = tmp_path / "claude-session"
     workdir = tmp_path / "work"
 
@@ -212,6 +237,8 @@ def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
     payload = json.loads(result.output)
     assert payload["client"] == "claude"
     assert payload["hook_every_steps"] == 7
+    assert payload["share_dir"] == str((tmp_path / "home" / ".evoinfer" / "dream-share").resolve())
+    assert payload["seed_memory_merge"]["imported_count"] == 7
     assert payload["hook_config_path"] == str((workdir / ".claude" / "settings.local.json").resolve())
     assert payload["launch_command"][0] == "claude"
     assert "--settings" in payload["launch_command"]
@@ -230,7 +257,10 @@ def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
 
 def test_evoinfer_root_cli_prompts_for_client_and_step_count(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.delenv("EVOINFER_SHARE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     session_dir = tmp_path / "interactive-session"
 
     result = CliRunner().invoke(
@@ -248,6 +278,7 @@ def test_evoinfer_root_cli_prompts_for_client_and_step_count(
     payload = json.loads(result.output[result.output.index("{") :])
     assert payload["client"] == "codex"
     assert payload["hook_every_steps"] == 6
+    assert payload["share_dir"] == str((tmp_path / "home" / ".evoinfer" / "dream-share").resolve())
     assert Path(payload["hook_config_path"]).is_file()
 
 
@@ -357,6 +388,8 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     assert "uv tool install --force --editable ." in text
     assert "uv run" not in text
     assert "uv run" not in chinese_text
+    assert "src/evoinfer_mcp/dream/seed_memories.json" in text
+    assert "evoinfer memory-seed --json" in text
     assert "dream_extract_and_write_memories" in text
     assert "evoinfer doctor --json" in text
     assert "evoinfer mcp-config --client codex" in text
@@ -367,6 +400,7 @@ def test_evoinfer_readme_documents_open_box_mcp_usage() -> None:
     assert "claude mcp add-json" in text
     assert "--enable-embedding" in text
     assert "EvoInfer Dream 是一个面向推理优化 agent 的开盒 MCP 记忆管理器" in chinese_text
+    assert "本地共享记忆库" in chinese_text
     assert "evoinfer --client codex --hook-every-steps 10" in chinese_text
 
 
@@ -521,6 +555,89 @@ def test_evoinfer_memory_export_and_import_cli_roundtrip(
     assert [memory["id"] for memory in json.loads(memory_file.read_text())["memories"]] == [
         "env_imported"
     ]
+
+
+def test_evoinfer_memory_seed_merges_packaged_memories_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    share_dir = tmp_path / "share"
+    memory_file = share_dir / "dream" / "memories.json"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "memories": [
+                    {
+                        "id": "opt_seed_cuda_softmax_shared_memory_v1",
+                        "category": "optimization",
+                        "title": "Local edited Softmax memory",
+                        "summary": "The user has already edited this seed memory locally.",
+                        "environment": "local",
+                        "model_type": "operator-kernel",
+                        "inference_backend": "cuda",
+                        "success": True,
+                        "detail_description": "Keep local edits when seeding.",
+                        "artifacts": ["local/benchmark.json"],
+                        "correctness_artifacts": ["local/correctness.json"],
+                        "chosen": 9,
+                        "useful_when_chosen": 6,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["memory-seed", "--share-dir", str(share_dir), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["seed_count"] == 7
+    assert payload["imported_count"] == 6
+    assert "opt_seed_cuda_softmax_shared_memory_v1" not in payload["memory_ids"]
+    persisted = json.loads(memory_file.read_text(encoding="utf-8"))["memories"]
+    by_id = {memory["id"]: memory for memory in persisted}
+    assert len(by_id) == 7
+    assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["title"] == "Local edited Softmax memory"
+    assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["chosen"] == 9
+
+    second = CliRunner().invoke(
+        cli,
+        ["memory-seed", "--share-dir", str(share_dir), "--json"],
+    )
+
+    assert second.exit_code == 0, second.output
+    assert json.loads(second.output)["imported_count"] == 0
+
+
+def test_evoinfer_seed_memories_are_searchable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    share_dir = tmp_path / "share"
+    monkeypatch.setenv("EVOINFER_SHARE_DIR", str(share_dir))
+
+    result = CliRunner().invoke(
+        cli,
+        ["memory-seed", "--share-dir", str(share_dir), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    response = search_dream_memories(
+        DreamMemorySearchInput(
+            query="optimize cuda row-wise softmax shared memory seq=2048",
+            category="optimization",
+            tags=["cuda", "softmax"],
+            top_k=3,
+            record_choice=False,
+        )
+    )
+    assert response.results
+    assert response.results[0].memory.id == "opt_seed_cuda_softmax_shared_memory_v1"
 
 
 def test_evoinfer_verify_protocol_cli_validates_campaign_artifacts(
