@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import math
+import os
 import re
 import uuid
 from collections.abc import Iterator
@@ -599,6 +600,52 @@ def load_packaged_seed_memories() -> list[DreamMemory]:
     return list(snapshot.memories)
 
 
+def ensure_packaged_seed_memories(share_dir: Path | None = None) -> dict[str, Any]:
+    """Seed a cold durable store with packaged EvoInfer memories.
+
+    This is the lazy MCP startup path. It only writes when the target store is
+    missing or empty, so existing user memories, local edits, and campaign
+    isolation stores are not implicitly merged on every tool call. Use
+    `merge_packaged_seed_memories` for explicit seed upgrades.
+    """
+
+    memory_file = dream_memory_file_for_share_dir(share_dir) if share_dir else dream_memory_file()
+    if os.getenv("EVOINFER_DISABLE_SEED_MEMORY") == "1":
+        return {
+            "share_dir": str(memory_file.parents[1]),
+            "memory_file": str(memory_file),
+            "seed_count": 0,
+            "imported_count": 0,
+            "existing_count": 0,
+            "memory_ids": [],
+            "disabled": True,
+        }
+
+    seed_memories = load_packaged_seed_memories()
+    with _locked_file(memory_file):
+        existing_memories = _read_memories_unlocked(memory_file)
+        if existing_memories:
+            return {
+                "share_dir": str(memory_file.parents[1]),
+                "memory_file": str(memory_file),
+                "seed_count": len(seed_memories),
+                "imported_count": 0,
+                "existing_count": len(existing_memories),
+                "memory_ids": [],
+                "already_initialized": True,
+            }
+        if seed_memories:
+            _write_memories_unlocked(memory_file, seed_memories)
+    return {
+        "share_dir": str(memory_file.parents[1]),
+        "memory_file": str(memory_file),
+        "seed_count": len(seed_memories),
+        "imported_count": len(seed_memories),
+        "existing_count": 0,
+        "memory_ids": [memory.id for memory in seed_memories],
+    }
+
+
 def merge_packaged_seed_memories(share_dir: Path | None = None) -> dict[str, Any]:
     """Merge packaged seed memories into a user's durable store without overwriting.
 
@@ -1164,6 +1211,7 @@ def _increment_chosen_unlocked(memories: list[DreamMemory], ids: set[str]) -> No
 def search_dream_memories(params: DreamMemorySearchInput) -> DreamMemorySearchResponse:
     """Retrieve memories by combining structured tags and lightweight semantic matching."""
 
+    ensure_packaged_seed_memories()
     memory_file = dream_memory_file()
     requested_tags = {_normalize_tag(tag) for tag in params.tags if _normalize_tag(tag)}
     query_embedding = _hashed_embedding(params.query)

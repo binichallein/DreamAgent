@@ -93,6 +93,26 @@ def test_search_dream_memories_tool_returns_ranked_text_and_records_choice(
     assert persisted["memories"][0]["chosen"] == 1
 
 
+def test_dream_mcp_search_lazily_seeds_empty_shared_store(tmp_path, monkeypatch) -> None:
+    share_dir = tmp_path / "shared-dream-store"
+    memory_file = share_dir / "dream" / "memories.json"
+    monkeypatch.setenv("EVOINFER_SHARE_DIR", str(share_dir))
+
+    text = dream_search_memories_tool(
+        query="optimize cuda row-wise softmax shared memory",
+        category="optimization",
+        tags=["cuda", "softmax"],
+        top_k=3,
+        record_choice=False,
+    )
+
+    assert "opt_seed_cuda_softmax_shared_memory_v1" in text
+    persisted = json.loads(memory_file.read_text(encoding="utf-8"))
+    by_id = {memory["id"]: memory for memory in persisted["memories"]}
+    assert len(by_id) == 7
+    assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["title"].startswith("CUDA row-wise")
+
+
 @pytest.fixture()
 def dream_memory_dir(tmp_path, monkeypatch):
     memory_dir = tmp_path / ".evoinfer"

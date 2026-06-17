@@ -27,6 +27,11 @@ your feedback counters, promoted memories, and edits remain authoritative.
 Claude/Codex sessions launched through `evoinfer` share this same local store
 unless you explicitly pass `--share-dir`.
 
+If a client starts the MCP server directly and the shared store is still empty,
+the first `dream_search_memories` call lazily initializes the store from the
+packaged seeds. This prevents retrieval cold-starts even when the CLI setup step
+was skipped.
+
 You can seed or inspect the local store manually:
 
 ```bash
