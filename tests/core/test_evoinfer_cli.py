@@ -66,7 +66,7 @@ def test_evoinfer_mcp_config_defaults_to_shared_seeded_store(
     server = payload["mcpServers"]["evoinfer-dream"]
     assert server["env"]["EVOINFER_SHARE_DIR"] == str(share_dir.resolve())
     memories = json.loads((share_dir / "dream" / "memories.json").read_text(encoding="utf-8"))
-    assert len(memories["memories"]) == 7
+    assert len(memories["memories"]) == 9
 
 
 def test_evoinfer_mcp_config_can_enable_cpu_embedding_backend(
@@ -238,7 +238,7 @@ def test_evoinfer_root_cli_creates_claude_hooked_session_bundle(
     assert payload["client"] == "claude"
     assert payload["hook_every_steps"] == 7
     assert payload["share_dir"] == str((tmp_path / "home" / ".evoinfer" / "dream-share").resolve())
-    assert payload["seed_memory_merge"]["imported_count"] == 7
+    assert payload["seed_memory_merge"]["imported_count"] == 9
     assert payload["hook_config_path"] == str((workdir / ".claude" / "settings.local.json").resolve())
     assert payload["launch_command"][0] == "claude"
     assert "--settings" in payload["launch_command"]
@@ -596,12 +596,12 @@ def test_evoinfer_memory_seed_merges_packaged_memories_without_overwriting(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["seed_count"] == 7
-    assert payload["imported_count"] == 6
+    assert payload["seed_count"] == 9
+    assert payload["imported_count"] == 8
     assert "opt_seed_cuda_softmax_shared_memory_v1" not in payload["memory_ids"]
     persisted = json.loads(memory_file.read_text(encoding="utf-8"))["memories"]
     by_id = {memory["id"]: memory for memory in persisted}
-    assert len(by_id) == 7
+    assert len(by_id) == 9
     assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["title"] == "Local edited Softmax memory"
     assert by_id["opt_seed_cuda_softmax_shared_memory_v1"]["chosen"] == 9
 
@@ -638,6 +638,72 @@ def test_evoinfer_seed_memories_are_searchable(
     )
     assert response.results
     assert response.results[0].memory.id == "opt_seed_cuda_softmax_shared_memory_v1"
+
+
+def test_evoinfer_packaged_memories_include_limx_experience() -> None:
+    from evoinfer_mcp.dream.memory import load_packaged_seed_memories
+
+    by_id = {memory.id: memory for memory in load_packaged_seed_memories()}
+
+    assert by_id["opt_seed_fla_parallel_attention_sdpa_boundary_v1"].evidence_level == "verified"
+    assert by_id["opt_seed_fla_parallel_attention_sdpa_boundary_v1"].workload == {
+        "operator": "causal_attention",
+        "library": "fla.ops.attn.parallel.parallel_attn",
+        "sequence_lengths": [512, 2048, 4096],
+    }
+    assert by_id["env_seed_backend_wheel_download_stall_v1"].debug_type == "network"
+    assert "vllm" in by_id["env_seed_backend_wheel_download_stall_v1"].tags
+
+
+def test_evoinfer_search_lazily_merges_new_packaged_seed_memories(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    share_dir = tmp_path / "share"
+    memory_file = share_dir / "dream" / "memories.json"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "memories": [
+                    {
+                        "id": "opt_local_existing",
+                        "category": "optimization",
+                        "title": "Existing local memory",
+                        "summary": "A user-created memory that must not block seed upgrades.",
+                        "environment": "local",
+                        "model_type": "operator-kernel",
+                        "inference_backend": "cuda",
+                        "success": True,
+                        "detail_description": "Keep this memory and merge missing packaged seeds.",
+                        "artifacts": ["local://benchmark.json"],
+                        "correctness_artifacts": ["local://correctness.json"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EVOINFER_SHARE_DIR", str(share_dir))
+
+    response = search_dream_memories(
+        DreamMemorySearchInput(
+            query="FLA parallel attention vs PyTorch SDPA causal attention benchmark",
+            category="optimization",
+            tags=["fla", "attention"],
+            top_k=5,
+            record_choice=False,
+        )
+    )
+
+    result_ids = [result.memory.id for result in response.results]
+    assert "opt_seed_fla_parallel_attention_sdpa_boundary_v1" in result_ids
+    persisted = json.loads(memory_file.read_text(encoding="utf-8"))["memories"]
+    persisted_ids = {memory["id"] for memory in persisted}
+    assert "opt_local_existing" in persisted_ids
+    assert "opt_seed_fla_parallel_attention_sdpa_boundary_v1" in persisted_ids
+    assert "env_seed_backend_wheel_download_stall_v1" in persisted_ids
 
 
 def test_evoinfer_verify_protocol_cli_validates_campaign_artifacts(

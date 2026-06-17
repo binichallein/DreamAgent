@@ -181,6 +181,83 @@
       "source_session_id": "seed"
     },
     {
+      "id": "opt_seed_fla_parallel_attention_sdpa_boundary_v1",
+      "category": "optimization",
+      "title": "FLA parallel attention needs SDPA boundary check",
+      "summary": "On limx RTX 3090, FLA parallel_attn beat the FLA naive reference on long causal attention but was slower than PyTorch SDPA on the tested standard causal workloads.",
+      "tags": ["fla", "attention", "pytorch", "sdpa", "causal_attention", "library-learning", "wrong-transfer"],
+      "environment": "limx RTX 3090, torch 2.12.0+cu126, triton 3.7.0, fla 0.5.0",
+      "model_type": "operator-kernel",
+      "model_arch": "decoder-only transformer attention",
+      "inference_backend": "fla",
+      "serving_framework": "library-kernel-baseline",
+      "precision": {"dtype": "float16", "accum_dtype": "float32"},
+      "workload": {
+        "operator": "causal_attention",
+        "library": "fla.ops.attn.parallel.parallel_attn",
+        "sequence_lengths": [512, 2048, 4096]
+      },
+      "metrics_before": {
+        "pytorch_sdpa_b1_t512_h8_d64_ms": 0.033,
+        "pytorch_sdpa_b1_t2048_h16_d64_ms": 0.230,
+        "pytorch_sdpa_b2_t2048_h16_d64_ms": 0.383,
+        "pytorch_sdpa_b1_t4096_h16_d64_ms": 0.679,
+        "fla_naive_b1_t4096_h16_d64_ms": 8.773
+      },
+      "metrics_after": {
+        "fla_parallel_b1_t512_h8_d64_ms": 0.116,
+        "fla_parallel_b1_t2048_h16_d64_ms": 0.374,
+        "fla_parallel_b2_t2048_h16_d64_ms": 0.572,
+        "fla_parallel_b1_t4096_h16_d64_ms": 1.004,
+        "speedup_vs_fla_naive_b1_t4096_h16_d64": 8.74,
+        "slower_than_pytorch_sdpa_on_tested_shapes": true
+      },
+      "objective_metric": "latency_ms_vs_pytorch_sdpa",
+      "success": false,
+      "detail_description": "Treat FLA parallel_attn as library-learning evidence, not as a universal replacement for PyTorch SDPA. The verified limx benchmark showed correctness passed for four causal-attention shapes, but FLA parallel_attn was slower than torch.nn.functional.scaled_dot_product_attention for those standard shapes while still much faster than FLA naive on long sequence. Use this memory to force a baseline boundary check before transferring FLA routes.",
+      "applicability": "Applies when an agent considers FLA parallel attention for standard causal attention on RTX 3090-class hardware and similar torch/triton/fla versions.",
+      "caveats": "This does not rule out FLA for specialized recurrent/linear attention workloads. Re-benchmark when dtype, layout, mask semantics, backend version, or GPU changes.",
+      "failure_reason": "FLA parallel_attn did not beat PyTorch SDPA on the tested standard causal-attention shapes.",
+      "operation_semantics": ["causal scaled dot-product attention"],
+      "correctness_invariants": [
+        "Compare output tensors against PyTorch SDPA for each B/T/H/D shape.",
+        "Keep causal mask semantics identical."
+      ],
+      "safe_transfer_notes": [
+        "Use FLA naive-vs-parallel speedup as evidence that library kernels can teach implementation routes.",
+        "Use PyTorch SDPA as a required baseline before claiming improvement."
+      ],
+      "unsafe_transfer_notes": [
+        "Do not present FLA parallel_attn as a win for standard causal attention unless it beats SDPA on the same workload.",
+        "Do not transfer this result to retention/GLA/delta-rule kernels without separate artifacts."
+      ],
+      "benchmark_command": "python experiments/limx_attention_bench/fla_attention_benchmark.py --warmup 6 --repeat 30",
+      "baseline_artifacts": [
+        "seed://evoinfer/limx/fla_attention_20260617/pytorch_sdpa_baseline.json",
+        "seed://evoinfer/limx/fla_attention_20260617/fla_naive_baseline.json"
+      ],
+      "optimized_artifacts": ["seed://evoinfer/limx/fla_attention_20260617/fla_parallel_attn.json"],
+      "correctness_artifacts": ["seed://evoinfer/limx/fla_attention_20260617/correctness_raw.json"],
+      "profiler_artifacts": ["seed://evoinfer/limx/fla_attention_20260617/profiler_summary.json"],
+      "artifact_refs": [
+        "seed://evoinfer/limx/fla_attention_20260617/environment.json",
+        "seed://evoinfer/limx/fla_attention_20260617/api_inventory.json",
+        "seed://evoinfer/limx/fla_attention_20260617/benchmark_raw.json",
+        "seed://evoinfer/limx/fla_attention_20260617/correctness_raw.json",
+        "seed://evoinfer/limx/fla_attention_20260617/verifier_result.json"
+      ],
+      "bottleneck_type": "attention_memory_compute_mix",
+      "promotion_decision": "promote_as_negative_transfer_constraint",
+      "rejection_reason": "Do not apply as a direct optimization over PyTorch SDPA for matching workloads.",
+      "status": "negative",
+      "evidence_level": "verified",
+      "promotion_reason": "Seeded from limx FLA attention benchmark artifacts verified by evoinfer_library_campaign_verifier.",
+      "chosen": 0,
+      "useful_when_chosen": 0,
+      "useful_rate": 0.0,
+      "source_session_id": "seed-limx-fla-attention-20260617"
+    },
+    {
       "id": "opt_seed_negative_skip_dtype_without_evidence_v1",
       "category": "optimization",
       "title": "Do not skip dtype branches without evidence",
@@ -214,6 +291,71 @@
       "useful_when_chosen": 0,
       "useful_rate": 0.0,
       "source_session_id": "seed"
+    },
+    {
+      "id": "env_seed_backend_wheel_download_stall_v1",
+      "category": "environment_debug",
+      "title": "vLLM/SGLang/TensorRT backend installs can stall on large wheel downloads",
+      "summary": "On limx, vLLM, SGLang, and TensorRT setup attempts stalled during uv or wheel downloads; treat this as an environment blocker and switch to prebuilt wheels, cache, or containerized installs before benchmarking.",
+      "tags": ["vllm", "sglang", "tensorrt", "uv", "pip", "wheel", "network", "install", "environment_debug"],
+      "environment": "limx RTX 3090, Ubuntu Linux, Python 3.12, NVIDIA driver 580.126.18",
+      "debug_type": "network",
+      "component": "Python backend package installation",
+      "hardware": "NVIDIA GeForce RTX 3090 24GB",
+      "os": "Ubuntu Linux",
+      "driver": "NVIDIA 580.126.18",
+      "runtime": "Python 3.12 package installation for vLLM/SGLang/TensorRT",
+      "dependency_stack": {
+        "attempted_packages": ["vllm", "sglang", "tensorrt", "onnx", "uv"],
+        "known_working_env": "torch 2.12.0+cu126, triton 3.7.0, fla 0.5.0, flashinfer 0.6.12"
+      },
+      "related_backend": "cuda",
+      "issue_signature": "pip uv vllm sglang tensorrt download stalls with no log progress",
+      "symptoms": "Install logs stayed at large downloads such as uv-0.11.21 or TensorRT/ONNX wheels for more than one minute without progress, preventing backend attention benchmarks.",
+      "root_cause": "The blocker was package acquisition/network throughput rather than an inference-kernel failure. The benchmark should not be recorded as a backend optimization failure.",
+      "solution": "Before benchmarking these backends, pre-stage wheels or use a pinned container/venv with vLLM, SGLang, TensorRT, ONNX, CUDA, and PyTorch already matched. If online install is required, use a reliable mirror/cache and capture install logs as environment artifacts.",
+      "verification": "The stalled installer processes were terminated, their logs were saved, and the environment-debug artifact bundle passed EvoInfer library-campaign verification as an environment_debug candidate.",
+      "commands": [
+        "python -m pip install vllm",
+        "python -m pip install sglang",
+        "python -m pip install tensorrt onnx",
+        "pkill -f 'pip install vllm|pip install sglang|pip install tensorrt'"
+      ],
+      "error_messages": [
+        "Downloading uv-0.11.21-py3-none-manylinux_2_17_x86_64.whl",
+        "Downloading TensorRT/ONNX wheels with no progress"
+      ],
+      "diagnostic_steps": [
+        "Started backend installs in separate logs.",
+        "Observed no file-size or log progress after repeated checks.",
+        "Classified the result as environment debug, not benchmark data.",
+        "Wrote environment.json, api_inventory.json, install logs, verifier_result.json, and dream_write_candidates.json."
+      ],
+      "prevention": "Run backend learning campaigns from prebuilt containers or cached wheels; keep install blockers out of optimization benchmark comparisons.",
+      "risk": "Do not infer vLLM, SGLang, or TensorRT performance from this memory. It only describes setup fragility.",
+      "diagnostic_artifacts": [
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_vllm.log",
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_sglang.log",
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_tensorrt.log"
+      ],
+      "verification_artifacts": [
+        "seed://evoinfer/limx/backend_install_debug_20260617/verifier_result.json",
+        "seed://evoinfer/limx/backend_install_debug_20260617/dream_write_candidates.json"
+      ],
+      "artifact_refs": [
+        "seed://evoinfer/limx/backend_install_debug_20260617/environment.json",
+        "seed://evoinfer/limx/backend_install_debug_20260617/api_inventory.json",
+        "seed://evoinfer/limx/backend_install_debug_20260617/environment_debug.json",
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_vllm.log",
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_sglang.log",
+        "seed://evoinfer/limx/backend_install_debug_20260617/install_tensorrt.log",
+        "seed://evoinfer/limx/backend_install_debug_20260617/verifier_result.json"
+      ],
+      "status": "promoted",
+      "evidence_level": "verified",
+      "success": false,
+      "promotion_reason": "Seeded from limx backend install debug artifacts verified as an environment_debug campaign.",
+      "source_session_id": "seed-limx-backend-install-debug-20260617"
     },
     {
       "id": "env_seed_flashinfer_jit_tsz_header_v1",

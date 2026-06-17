@@ -45,9 +45,11 @@ def main() -> None:
         q, k, v = make_inputs(shape, dtype)
         scale = 1.0 / math.sqrt(shape["head_dim"])
 
-        candidate = lambda: parallel_attn(q, k, v, scale=scale)
-        baseline = lambda: torch_sdpa(q, k, v)
-        reference = lambda: unwrap(naive_parallel_attn(q, k, v, scale=scale))
+        candidate = lambda q=q, k=k, v=v, scale=scale: parallel_attn(q, k, v, scale=scale)
+        baseline = lambda q=q, k=k, v=v: torch_sdpa(q, k, v)
+        reference = lambda q=q, k=k, v=v, scale=scale: unwrap(
+            naive_parallel_attn(q, k, v, scale=scale)
+        )
 
         candidate_out = candidate()
         baseline_out = baseline()

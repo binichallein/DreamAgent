@@ -27,10 +27,16 @@ your feedback counters, promoted memories, and edits remain authoritative.
 Claude/Codex sessions launched through `evoinfer` share this same local store
 unless you explicitly pass `--share-dir`.
 
-If a client starts the MCP server directly and the shared store is still empty,
-the first `dream_search_memories` call lazily initializes the store from the
-packaged seeds. This prevents retrieval cold-starts even when the CLI setup step
-was skipped.
+If a client starts the MCP server directly, the first `dream_search_memories`
+call also lazily merges missing packaged seeds into the shared store. This
+prevents retrieval cold-starts and lets package upgrades add new built-in
+experience without overwriting local user memories.
+
+Current packaged experience includes CUDA softmax/RMSNorm operator memories,
+FlashInfer attention baseline evidence, FLA route-policy campaign evidence, a
+limx FLA parallel-attention boundary memory against PyTorch SDPA, and reusable
+environment-debug memories for FlashInfer JIT, voice STT CPU fallback, and
+vLLM/SGLang/TensorRT wheel-download stalls.
 
 You can seed or inspect the local store manually:
 

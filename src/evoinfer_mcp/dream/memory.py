@@ -625,13 +625,17 @@ def ensure_packaged_seed_memories(share_dir: Path | None = None) -> dict[str, An
     with _locked_file(memory_file):
         existing_memories = _read_memories_unlocked(memory_file)
         if existing_memories:
+            existing_ids = {memory.id for memory in existing_memories}
+            imported = [memory for memory in seed_memories if memory.id not in existing_ids]
+            if imported:
+                _write_memories_unlocked(memory_file, [*existing_memories, *imported])
             return {
                 "share_dir": str(memory_file.parents[1]),
                 "memory_file": str(memory_file),
                 "seed_count": len(seed_memories),
-                "imported_count": 0,
+                "imported_count": len(imported),
                 "existing_count": len(existing_memories),
-                "memory_ids": [],
+                "memory_ids": [memory.id for memory in imported],
                 "already_initialized": True,
             }
         if seed_memories:

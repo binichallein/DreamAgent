@@ -209,6 +209,7 @@ def dream_search_memories_tool(
     query: str,
     category: Literal["optimization", "environment_debug"] = "optimization",
     tags: list[str] | None = None,
+    memory_ids: list[str] | None = None,
     top_k: int = 5,
     record_choice: bool = True,
     render_mode: DreamSearchRenderMode = "full",
@@ -222,6 +223,7 @@ def dream_search_memories_tool(
             "query": query,
             "category": category,
             "tags": tags or [],
+            "memory_ids": memory_ids or [],
             "top_k": top_k,
             "record_choice": record_choice,
             "render_mode": render_mode,
@@ -235,6 +237,7 @@ def dream_search_memories_tool(
         query=search_query,
         category=_normalize_category(category),
         tags=tags or [],
+        memory_ids=memory_ids or [],
         top_k=max(1, min(20, top_k)),
         record_choice=record_choice,
     )
@@ -733,6 +736,7 @@ def search_dream_memories_tool(
     query: str,
     category: Literal["optimization", "environment_debug"] = "optimization",
     tags: list[str] | None = None,
+    memory_ids: list[str] | None = None,
     top_k: int = 5,
     record_choice: bool = True,
 ) -> str:
@@ -742,6 +746,7 @@ def search_dream_memories_tool(
             "query": query,
             "category": category,
             "tags": tags or [],
+            "memory_ids": memory_ids or [],
             "top_k": top_k,
             "record_choice": record_choice,
         },
@@ -750,6 +755,7 @@ def search_dream_memories_tool(
         query=query,
         category=category,
         tags=tags,
+        memory_ids=memory_ids,
         top_k=top_k,
         record_choice=record_choice,
     )
